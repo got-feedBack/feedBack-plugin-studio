@@ -31,7 +31,7 @@ A collaborative band recording and mixing plugin for [Slopsmith](https://github.
 - **Fade In / Fade Out** (ms) — smooth volume ramps at track edges, visualized as gradient overlays on the waveform
 
 #### Per-Track Effects (Gear Rack UI)
-Each track has three effects rendered as clickable Rocksmith gear rack unit images. Click to open a popup with interactive SVG rotary knobs.
+Each track has three effects rendered as clickable effect rack unit images. Click to open a popup with interactive SVG rotary knobs.
 
 - **Parametric EQ** — 3-band: Low shelf (200Hz), Mid peak (1kHz), High shelf (4kHz). Range: -12dB to +12dB per band.
 - **Compressor** — Threshold (-60 to 0dB), Ratio (1:1 to 20:1), Attack (1-100ms), Release (10-1000ms). Bypassed when ratio is 1:1.
@@ -59,7 +59,7 @@ Track Source
 
 - **Waveform Display** — per-track canvas waveforms tinted with the track color, normalized to the session duration so all tracks align visually.
 - **Zoom & Scroll** — zoom in/out (+/- buttons, Ctrl+scroll wheel), horizontal scroll bar, auto-scroll follows the playhead during playback.
-- **Markers** — named points on the timeline (Verse, Chorus, Solo, etc.). Click to seek. Add manually or import from the song's CDLC section metadata. Shown as vertical lines on all waveforms.
+- **Markers** — named points on the timeline (Verse, Chorus, Solo, etc.). Click to seek. Add manually or import from the song's custom song section metadata. Shown as vertical lines on all waveforms.
 - **Seek** — click anywhere on a waveform to seek, or use the transport seek bar.
 
 ### Stem Separation (Demucs)

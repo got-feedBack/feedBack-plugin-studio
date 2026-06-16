@@ -1394,6 +1394,6 @@ def setup(app, context):
             if cached2.exists():
                 return str(cached2)
 
-        # No cached audio available. The legacy .psarc extraction path has
+        # No cached audio available. The legacy .archive extraction path has
         # been removed; only pre-extracted/static-cached audio is supported.
         return None
