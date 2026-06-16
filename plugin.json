@@ -1,0 +1,12 @@
+{
+    "id": "studio",
+    "name": "Band Studio",
+    "version": "1.0.0",
+    "nav": {
+        "label": "Studio",
+        "screen": "studio"
+    },
+    "screen": "screen.html",
+    "script": "screen.js",
+    "routes": "routes.py"
+}

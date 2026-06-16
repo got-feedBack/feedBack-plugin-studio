@@ -1,0 +1,340 @@
+<!-- Studio Plugin — Session List + Mixer -->
+<div id="studio-root" class="max-w-6xl mx-auto px-6 pt-24 pb-16">
+
+    <!-- ── Session List View ─────────────────────────────────────── -->
+    <div id="studio-list-view">
+        <div class="flex items-center justify-between mb-6">
+            <div>
+                <button onclick="showScreen('home')" class="text-gray-500 hover:text-white text-sm mb-2 block">
+                    &larr; Back
+                </button>
+                <h2 class="text-3xl font-bold text-white">Band Studio</h2>
+                <p class="text-gray-500 text-sm mt-1">Record, layer, and mix band performances</p>
+            </div>
+            <button onclick="studioShowNewSession()"
+                class="px-4 py-2 bg-accent hover:bg-accent-light rounded-lg text-white text-sm font-medium transition-colors">
+                + New Session
+            </button>
+        </div>
+
+        <!-- New Session Form (hidden by default) -->
+        <div id="studio-new-session" class="hidden mb-6 bg-dark-700 rounded-xl p-5 border border-gray-800">
+            <h3 class="text-white font-semibold mb-3">Create New Session</h3>
+            <div class="space-y-3">
+                <div>
+                    <label class="text-gray-400 text-xs block mb-1">Session Name</label>
+                    <input id="studio-session-name" type="text" placeholder="e.g. Master of Puppets - Our Band"
+                        class="w-full bg-dark-800 text-white rounded-lg px-3 py-2 text-sm border border-gray-700 focus:border-accent/50 focus:outline-none">
+                </div>
+                <div>
+                    <label class="text-gray-400 text-xs block mb-1">Song</label>
+                    <div class="relative">
+                        <input id="studio-song-search" type="text" placeholder="Search your library..."
+                            oninput="studioSearchSongs(this.value)"
+                            class="w-full bg-dark-800 text-white rounded-lg px-3 py-2 text-sm border border-gray-700 focus:border-accent/50 focus:outline-none">
+                        <div id="studio-song-results"
+                            class="hidden absolute z-20 mt-1 w-full bg-dark-700 border border-gray-700 rounded-lg max-h-48 overflow-y-auto shadow-xl">
+                        </div>
+                    </div>
+                    <input id="studio-song-filename" type="hidden">
+                    <div id="studio-song-selected" class="hidden mt-2 text-sm text-accent"></div>
+                </div>
+                <div>
+                    <label class="text-gray-400 text-xs block mb-1">Your Name</label>
+                    <input id="studio-user-name" type="text" placeholder="e.g. Byron"
+                        class="w-full bg-dark-800 text-white rounded-lg px-3 py-2 text-sm border border-gray-700 focus:border-accent/50 focus:outline-none">
+                </div>
+                <div class="flex gap-2 pt-1">
+                    <button onclick="studioCreateSession()"
+                        class="px-4 py-2 bg-accent hover:bg-accent-light rounded-lg text-white text-sm font-medium transition-colors">
+                        Create
+                    </button>
+                    <button onclick="studioHideNewSession()"
+                        class="px-4 py-2 bg-dark-600 hover:bg-dark-500 rounded-lg text-gray-300 text-sm transition-colors">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sessions Grid -->
+        <div id="studio-sessions-grid" class="space-y-2">
+            <div class="text-gray-500 text-sm py-8 text-center">Loading sessions...</div>
+        </div>
+
+        <!-- Demucs Settings -->
+        <div class="mt-8">
+            <button onclick="studioToggleDemucsSettings()"
+                class="text-gray-500 hover:text-gray-300 text-sm flex items-center gap-1 transition-colors">
+                <span id="studio-demucs-arrow" class="text-xs">&#9654;</span>
+                Demucs Server Settings
+            </button>
+            <div id="studio-demucs-settings" class="hidden mt-3 bg-dark-700 rounded-xl p-5 border border-gray-800">
+                <p class="text-gray-500 text-xs mb-3">Connect to a Demucs server to extract drum/bass/vocal stems from songs.</p>
+                <div class="space-y-3">
+                    <div>
+                        <label class="text-gray-400 text-xs block mb-1">Server URL</label>
+                        <input id="studio-demucs-url" type="text" placeholder="e.g. http://192.168.1.100:7865"
+                            class="w-full bg-dark-800 text-white rounded-lg px-3 py-2 text-sm border border-gray-700 focus:border-accent/50 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="text-gray-400 text-xs block mb-1">API Key (optional)</label>
+                        <input id="studio-demucs-apikey" type="password" placeholder="Leave blank if none"
+                            class="w-full bg-dark-800 text-white rounded-lg px-3 py-2 text-sm border border-gray-700 focus:border-accent/50 focus:outline-none">
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="studioSaveDemucsConfig()"
+                            class="px-3 py-1.5 bg-accent hover:bg-accent-light rounded-lg text-white text-sm transition-colors">
+                            Save
+                        </button>
+                        <button onclick="studioTestDemucs()"
+                            class="px-3 py-1.5 bg-dark-600 hover:bg-dark-500 rounded-lg text-gray-300 text-sm transition-colors">
+                            Test Connection
+                        </button>
+                        <span id="studio-demucs-status" class="text-xs ml-2"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Session Detail / Mixer View ───────────────────────────── -->
+    <div id="studio-mixer-view" class="hidden">
+        <!-- Header -->
+        <div class="mb-4">
+            <button onclick="studioBackToList()" class="text-gray-500 hover:text-white text-sm mb-2 block">
+                &larr; Back to Sessions
+            </button>
+            <h2 id="studio-session-title" class="text-2xl font-bold text-white"></h2>
+            <p id="studio-session-song" class="text-gray-400 text-sm mt-1"></p>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="flex items-center gap-3 mb-4 bg-dark-700 rounded-xl px-4 py-3 border border-gray-800">
+            <button id="studio-btn-record" onclick="studioToggleRecord()"
+                class="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg text-sm font-medium transition-colors border border-red-600/30">
+                <span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>
+                Record
+            </button>
+            <button id="studio-btn-highway-record" onclick="studioHighwayRecord()"
+                class="flex items-center gap-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg text-sm font-medium transition-colors border border-red-600/30"
+                title="Record while playing on the highway">
+                <span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>
+                Record on Highway
+            </button>
+            <button id="studio-btn-play" onclick="studioTogglePlay()"
+                class="px-3 py-1.5 bg-dark-600 hover:bg-dark-500 rounded-lg text-white text-sm transition-colors">
+                &#9654; Play
+            </button>
+            <button onclick="studioStop()"
+                class="px-3 py-1.5 bg-dark-600 hover:bg-dark-500 rounded-lg text-white text-sm transition-colors">
+                &#9632; Stop
+            </button>
+            <button onclick="studioPractice()"
+                class="px-3 py-1.5 bg-dark-600 hover:bg-dark-500 rounded-lg text-white text-sm transition-colors"
+                title="Open song on the highway to practice">
+                &#9835; Practice
+            </button>
+            <div class="flex-1"></div>
+            <!-- Record settings -->
+            <div class="flex items-center gap-2">
+                <label class="text-gray-500 text-xs">Input:</label>
+                <select id="studio-input-device"
+                    class="bg-dark-800 text-gray-300 text-xs rounded px-2 py-1 border border-gray-700 max-w-[200px]">
+                    <option value="">Default</option>
+                </select>
+            </div>
+            <div class="flex items-center gap-2">
+                <label class="text-gray-500 text-xs">As:</label>
+                <input id="studio-record-trackname" type="text" value="Lead" placeholder="Track name"
+                    class="bg-dark-800 text-gray-300 text-xs rounded px-2 py-1 border border-gray-700 w-28"
+                    list="studio-trackname-suggestions">
+                <datalist id="studio-trackname-suggestions">
+                    <option value="Lead">
+                    <option value="Lead Double">
+                    <option value="Rhythm">
+                    <option value="Rhythm L">
+                    <option value="Rhythm R">
+                    <option value="Bass">
+                    <option value="Vocals">
+                    <option value="Acoustic">
+                    <option value="Clean">
+                    <option value="Solo">
+                </datalist>
+            </div>
+            <button id="studio-btn-undo" onclick="studioUndo()" disabled
+                class="px-2 py-1.5 bg-dark-600 hover:bg-dark-500 rounded-lg text-gray-400 text-sm transition-colors opacity-30"
+                title="Undo (Ctrl+Z)">&#8630;</button>
+            <button id="studio-btn-redo" onclick="studioRedo()" disabled
+                class="px-2 py-1.5 bg-dark-600 hover:bg-dark-500 rounded-lg text-gray-400 text-sm transition-colors opacity-30"
+                title="Redo (Ctrl+Y)">&#8631;</button>
+            <button id="studio-btn-export" onclick="studioExportMix()"
+                class="px-3 py-1.5 bg-accent/20 hover:bg-accent/40 text-accent rounded-lg text-sm font-medium transition-colors border border-accent/30">
+                Export Mix
+            </button>
+        </div>
+
+        <!-- Recording indicator -->
+        <div id="studio-recording-bar" class="hidden mb-3 bg-red-900/30 border border-red-600/40 rounded-xl px-4 py-2 flex items-center gap-3">
+            <span class="w-3 h-3 rounded-full bg-red-500 animate-pulse"></span>
+            <span class="text-red-300 text-sm font-medium">Recording...</span>
+            <span id="studio-rec-time" class="text-red-400 text-sm ml-auto font-mono">0:00</span>
+        </div>
+
+        <!-- Upload progress -->
+        <div id="studio-upload-bar" class="hidden mb-3 bg-dark-700 border border-gray-800 rounded-xl px-4 py-2">
+            <div class="flex items-center gap-3 mb-1">
+                <span class="text-gray-300 text-sm">Uploading recording...</span>
+                <span id="studio-upload-pct" class="text-accent text-sm ml-auto font-mono">0%</span>
+            </div>
+            <div class="w-full bg-dark-800 rounded-full h-1.5">
+                <div id="studio-upload-progress" class="bg-accent rounded-full h-1.5 transition-all" style="width:0%"></div>
+            </div>
+        </div>
+
+        <!-- Track List / Mixer -->
+        <div id="studio-tracks-container" class="space-y-1 mb-4">
+            <!-- Original song track -->
+            <div id="studio-original-track"
+                class="bg-dark-700 rounded-xl px-4 py-3 border border-gray-800 flex items-center gap-3">
+                <div class="w-28 flex-shrink-0">
+                    <div class="text-white text-sm font-medium truncate">Original</div>
+                    <div class="text-gray-500 text-xs">Song audio</div>
+                </div>
+                <canvas id="studio-waveform-original" class="flex-1 h-12 rounded bg-dark-800 cursor-pointer"
+                    onclick="studioSeekFromWaveform(event, this)"></canvas>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                    <input type="range" min="0" max="150" value="100"
+                        class="w-16 h-1 accent-accent"
+                        oninput="studioSetVolume('original', this.value/100)"
+                        title="Volume">
+                    <input type="range" min="-100" max="100" value="0"
+                        class="w-12 h-1 accent-accent"
+                        oninput="studioSetPan('original', this.value/100)"
+                        title="Pan">
+                    <button onclick="studioToggleMute('original')"
+                        class="w-7 h-7 rounded text-xs font-bold bg-dark-600 hover:bg-dark-500 text-gray-400 transition-colors"
+                        data-mute="original">M</button>
+                    <button onclick="studioToggleSolo('original')"
+                        class="w-7 h-7 rounded text-xs font-bold bg-dark-600 hover:bg-dark-500 text-gray-400 transition-colors"
+                        data-solo="original">S</button>
+                </div>
+            </div>
+
+            <!-- Demucs stem extraction -->
+            <div id="studio-demucs-extract" class="bg-dark-700/50 rounded-xl px-4 py-2.5 border border-gray-800/50 border-dashed flex items-center gap-3">
+                <div class="w-28 flex-shrink-0">
+                    <div class="text-gray-500 text-sm font-medium">Stems</div>
+                </div>
+                <div class="flex-1">
+                    <button onclick="studioExtractDrums()"
+                        class="px-3 py-1 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded-lg text-xs font-medium transition-colors border border-purple-600/30">
+                        Extract Drums
+                    </button>
+                    <button onclick="studioExtractAllStems()"
+                        class="ml-1 px-3 py-1 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 rounded-lg text-xs font-medium transition-colors border border-purple-600/30">
+                        Extract All Stems
+                    </button>
+                    <span id="studio-demucs-extract-status" class="ml-2 text-gray-500 text-xs"></span>
+                </div>
+            </div>
+
+            <!-- Recorded tracks inserted here -->
+            <div id="studio-recorded-tracks"></div>
+
+            <!-- Add Track / Import -->
+            <div class="flex items-center gap-2 mt-1">
+                <button onclick="studioAddTrack()"
+                    class="px-3 py-1.5 bg-dark-600 hover:bg-dark-500 rounded-lg text-gray-400 text-xs transition-colors border border-gray-800 border-dashed">
+                    + Add Track
+                </button>
+                <label class="px-3 py-1.5 bg-dark-600 hover:bg-dark-500 rounded-lg text-gray-400 text-xs transition-colors border border-gray-800 border-dashed cursor-pointer">
+                    Import Audio
+                    <input type="file" accept="audio/*" class="hidden" onchange="studioImportAudioFile(this)">
+                </label>
+            </div>
+        </div>
+
+        <!-- Master Bus -->
+        <div class="bg-dark-700 rounded-xl px-4 py-2.5 border border-gray-800 flex items-center gap-3 mb-1">
+            <span class="text-gray-400 text-xs font-medium w-14">Master</span>
+            <span class="text-gray-500 text-xs">Vol</span>
+            <input type="range" min="0" max="200" value="100" step="1"
+                class="w-24 h-1 accent-accent"
+                oninput="studioSetMasterVolume(this.value/100)"
+                title="Master volume">
+            <span id="studio-master-vol-label" class="text-gray-400 text-xs w-10">100%</span>
+            <button id="studio-master-limiter-btn" onclick="studioToggleMasterLimiter()"
+                class="px-2 py-0.5 rounded text-xs font-medium transition-colors bg-green-600/30 text-green-400 border border-green-600/30">
+                Limiter ON
+            </button>
+            <div class="flex-1"></div>
+            <div id="studio-master-meter" class="w-32 h-3 bg-dark-800 rounded-full overflow-hidden">
+                <div id="studio-master-meter-bar" class="h-full bg-green-500 rounded-full transition-all" style="width:0%"></div>
+            </div>
+        </div>
+
+        <!-- Transport / Seek Bar -->
+        <div class="bg-dark-700 rounded-xl px-4 py-3 border border-gray-800 space-y-2">
+            <div class="flex items-center gap-3">
+                <span id="studio-time-current" class="text-white text-sm font-mono w-12 text-right">0:00</span>
+                <input id="studio-seek-bar" type="range" min="0" max="100" value="0" step="0.1"
+                    class="flex-1 h-1 accent-accent cursor-pointer"
+                    oninput="studioSeek(this.value)">
+                <span id="studio-time-total" class="text-gray-400 text-sm font-mono w-12">0:00</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <button onclick="studioZoomIn()" class="text-gray-500 hover:text-white text-xs px-1.5 py-0.5 bg-dark-800 rounded transition-colors" title="Zoom in (Ctrl+scroll)">+</button>
+                <button onclick="studioZoomOut()" class="text-gray-500 hover:text-white text-xs px-1.5 py-0.5 bg-dark-800 rounded transition-colors" title="Zoom out">-</button>
+                <button onclick="studioZoomFit()" class="text-gray-500 hover:text-white text-xs px-1.5 py-0.5 bg-dark-800 rounded transition-colors" title="Fit to window">Fit</button>
+                <span id="studio-zoom-label" class="text-gray-600 text-xs w-8">Fit</span>
+                <input id="studio-scroll-bar" type="range" min="0" max="1" value="0" step="0.1"
+                    class="flex-1 h-1 accent-accent cursor-pointer"
+                    oninput="studioScrollTimeline(this.value)">
+            </div>
+        </div>
+
+        <!-- Punch-in Region -->
+        <div id="studio-punch-bar" class="mt-1 bg-dark-700 rounded-xl px-4 py-2.5 border border-gray-800">
+            <div class="flex items-center gap-3">
+                <span class="text-gray-500 text-xs w-14">Punch In</span>
+                <label class="text-gray-500 text-xs">In:</label>
+                <input id="studio-punch-in" type="text" value="0:00" placeholder="0:00"
+                    class="w-14 bg-dark-800 text-gray-300 text-xs rounded px-1.5 py-0.5 border border-gray-700 text-center font-mono">
+                <button onclick="studioPunchSetIn()" class="text-gray-500 hover:text-accent text-xs transition-colors" title="Set to current position">[</button>
+                <label class="text-gray-500 text-xs">Out:</label>
+                <input id="studio-punch-out" type="text" value="0:00" placeholder="0:00"
+                    class="w-14 bg-dark-800 text-gray-300 text-xs rounded px-1.5 py-0.5 border border-gray-700 text-center font-mono">
+                <button onclick="studioPunchSetOut()" class="text-gray-500 hover:text-accent text-xs transition-colors" title="Set to current position">]</button>
+                <label class="text-gray-500 text-xs ml-1">Track:</label>
+                <select id="studio-punch-track"
+                    class="bg-dark-800 text-gray-300 text-xs rounded px-1.5 py-0.5 border border-gray-700 max-w-[140px]">
+                </select>
+                <button onclick="studioPunchRecord()" id="studio-btn-punch"
+                    class="ml-auto flex items-center gap-1.5 px-3 py-1 bg-orange-600/20 hover:bg-orange-600/40 text-orange-300 rounded-lg text-xs font-medium transition-colors border border-orange-600/30">
+                    <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                    Punch Record
+                </button>
+            </div>
+        </div>
+
+        <!-- Markers -->
+        <div class="mt-1 bg-dark-700 rounded-xl px-4 py-2 border border-gray-800">
+            <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-gray-500 text-xs w-14">Markers</span>
+                <div id="studio-markers-list" class="flex items-center gap-1 flex-wrap flex-1"></div>
+                <button onclick="studioAddMarker()"
+                    class="text-gray-500 hover:text-accent text-xs transition-colors" title="Add marker at current position">+ Add</button>
+                <button onclick="studioImportSongMarkers()"
+                    class="text-gray-500 hover:text-accent text-xs transition-colors" title="Import sections from song">Import from Song</button>
+            </div>
+        </div>
+
+        <!-- Export status -->
+        <div id="studio-export-status" class="hidden mt-3 bg-dark-700 border border-gray-800 rounded-xl px-4 py-3">
+            <span id="studio-export-msg" class="text-gray-300 text-sm"></span>
+            <a id="studio-export-link" href="#" target="_blank"
+                class="hidden text-accent hover:text-accent-light text-sm ml-2">Download</a>
+        </div>
+    </div>
+</div>
