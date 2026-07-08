@@ -46,7 +46,7 @@ export function _drawWaveform(key, audioBuffer, canvas) {
     const channelData = audioBuffer.getChannelData(0);
     const trackDuration = audioBuffer.duration;
     const totalDuration = S.duration || trackDuration;
-    const peakCount = Math.min(W, 800);
+    const peakCount = Math.floor(Math.min(W, 800));   // integer: Float32Array length must be integral
     // How many peaks this track actually fills (proportional to duration)
     const filledPeaks = Math.round(peakCount * (trackDuration / totalDuration));
     const samplesPerPeak = filledPeaks > 0 ? Math.ceil(channelData.length / filledPeaks) : 1;
