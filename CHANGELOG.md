@@ -6,6 +6,13 @@ All notable changes to the Band Studio plugin are documented here.
 
 ### Changed
 
+- **ES-module migration, step 2 — extract pure helpers to `src/util.js`.** Nine
+  state-free helpers (`_parseTimeInput`, `_formatTime`, `_formatDate`, `_esc`,
+  `Path_stem`, `_eqLabel`, `_compLabel`, `_polarToCartesian`, `_describeArc`) move
+  to their own module with real-import tests (`tests/util.test.mjs`); adds
+  `package.json` so the reusable CI runs `npm test`. `main.js` imports them by the
+  same names — call sites unchanged. Move-only, no behaviour change.
+
 - **ES-module migration, step 1 — the bootstrap flip (R1b pilot).** `screen.js`
   is now a one-line `import './src/main.js'` and the plugin declares
   `"scriptType": "module"` + `"minHost": "0.3.0-alpha.1"` in `plugin.json`; the
