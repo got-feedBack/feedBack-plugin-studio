@@ -6,6 +6,20 @@ All notable changes to the Band Studio plugin are documented here.
 
 ### Changed
 
+- **ES-module migration, step 9 — extract recording to `src/recording.js`.**
+  Main-track capture, punch-in/out re-record, and live "highway" recording
+  (MediaRecorder + upload) — 18 functions incl. the `window.studio*` record
+  commands (which self-register), `_startRecording`/`_stopRecording`,
+  `_uploadRecording`/`_uploadPunchRecording`, `_beginHwRecording`/`_hwUploadRecording`
+  + the highway overlay/meter helpers, `PUNCH_PREROLL`, and `_populatePunchTrackSelect`.
+  Imports state/util/audio-graph/prefs; reaches session reload through an injected
+  `configureRecording({reloadSession})` seam (main owns `_reloadSession`, which
+  itself calls the exported `_populatePunchTrackSelect`) — no static cycle. The
+  `window.studio*` record commands register **inside** `configureRecording` (the
+  guarded path), not at module top level, so a fresh re-eval can't clobber the
+  installed handlers — honouring the §V idempotency guard. `main.js` 1993 → 1309.
+  Move-only, no behaviour change.
+
 - **ES-module migration, step 8 — extract undo/redo + mix-save to `src/undo.js`.**
   `_pushUndo`/`_captureUndoNow` (debounced snapshots, §VI), `_updateUndoButtons`,
   `_applyRestoredMixState` (re-applies a snapshot to the live graph + re-renders),
