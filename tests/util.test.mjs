@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 import {
     _parseTimeInput, _formatTime, _formatDate, _esc, Path_stem,
-    _eqLabel, _compLabel, _polarToCartesian, _describeArc,
+    _eqLabel, _compLabel, _polarToCartesian, _describeArc, _getTrackColor,
 } from '../src/util.js';
 
 test('_parseTimeInput accepts M:SS, M:SS.ms, and plain seconds', () => {
@@ -61,4 +61,15 @@ test('_polarToCartesian + _describeArc are deterministic geometry', () => {
     assert.ok(Math.abs(p.x - 10) < 1e-9 && Math.abs(p.y - 0) < 1e-9);
     const arc = _describeArc(50, 50, 40, 0, 90);
     assert.match(arc, /^M [\d.-]+ [\d.-]+ A 40 40 0 [01] 0 [\d.-]+ [\d.-]+$/);
+});
+
+test('_getTrackColor: explicit color wins, else instrument match, else palette by id', () => {
+    assert.equal(_getTrackColor({ color: '#abcdef', id: 0 }), '#abcdef');   // explicit wins
+    assert.equal(_getTrackColor({ track_name: 'Lead Guitar', id: 3 }), '#4080e0'); // 'lead' match
+    assert.equal(_getTrackColor({ instrument: 'Bass', id: 9 }), '#40c070');        // 'bass' match
+    // no color, no instrument match → palette cycles by id % 10
+    const c0 = _getTrackColor({ id: 0 });
+    const c10 = _getTrackColor({ id: 10 });
+    assert.equal(c0, c10);                    // wraps at 10 colours
+    assert.match(c0, /^#[0-9a-f]{6}$/);
 });

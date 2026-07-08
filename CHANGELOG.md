@@ -6,6 +6,17 @@ All notable changes to the Band Studio plugin are documented here.
 
 ### Changed
 
+- **ES-module migration, step 6 — extract the visualisation layer to
+  `src/viz.js`.** The requestAnimationFrame playhead loop (`_startAnimLoop`/
+  `_stopAnimLoop`), waveform canvas rendering + zoom/scroll (`_drawWaveform`/
+  `_redrawWaveform`/`_drawAllCursors`/`_clampScroll`/`_initWaveformWheelZoom`),
+  and the master level meter (`_startMasterMeter`/`_debounceSaveMaster`) move out
+  of `main.js`. Upper layer over the audio engine: imports `_getAudioCtx` from
+  audio-graph.js + `_formatTime` from util.js, reaches the stop action via the
+  `window.studioStop` global (no import-back). The 3 animation/meter hooks it
+  exports are the ones `main.js` injects into audio-graph via `configureAudioGraph`
+  (no cycle — audio-graph never imports viz). Move-only, no behaviour change.
+
 - **ES-module migration, step 5 — extract the Web Audio engine to
   `src/audio-graph.js`.** The playback graph (`_getAudioCtx`, `_createReverbBus`,
   `_play`/`_pause`, `_stopAllSources`, `_applyMixToLiveAudio`/`_applyAllMixToLive`,

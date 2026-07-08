@@ -74,3 +74,26 @@ export function _describeArc(cx, cy, r, startAngle, endAngle) {
     const largeArc = endAngle - startAngle <= 180 ? '0' : '1';
     return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`;
 }
+
+// Track waveform colours: honour an explicit color, else match the instrument
+// name, else cycle the palette by track id. Pure (reads the track object only).
+const TRACK_COLORS = [
+    '#4080e0', '#e05040', '#40c070', '#c060e0', '#e0a030',
+    '#50b0d0', '#e07090', '#80c040', '#a080e0', '#d0a060',
+];
+const INSTRUMENT_COLORS = {
+    lead: '#4080e0', solo: '#4080e0',
+    rhythm: '#e05040', clean: '#e07090', acoustic: '#d0a060',
+    bass: '#40c070',
+    drums: '#c060e0',
+    vocals: '#e0a030',
+    other: '#50b0d0',
+};
+export function _getTrackColor(t) {
+    if (t.color) return t.color;
+    const name = (t.track_name || t.instrument || '').toLowerCase();
+    for (const [key, col] of Object.entries(INSTRUMENT_COLORS)) {
+        if (name.includes(key)) return col;
+    }
+    return TRACK_COLORS[t.id % TRACK_COLORS.length];
+}
