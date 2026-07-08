@@ -35,6 +35,10 @@ export function _captureUndoNow() {
 }
 
 export function _applyRestoredMixState() {
+    // Cancel any pending debounced snapshot first: a timer armed by a slider
+    // drag just before undo/redo would otherwise fire afterward, capture the
+    // post-restore state, and clear redoStack — breaking redo history.
+    if (S.undoDebounceTimer) { clearTimeout(S.undoDebounceTimer); S.undoDebounceTimer = null; }
     // Re-render tracks to reflect new slider values
     _renderTracks();
     // Apply to live audio if playing
