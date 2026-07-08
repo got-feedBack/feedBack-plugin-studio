@@ -6,6 +6,17 @@ All notable changes to the Band Studio plugin are documented here.
 
 ### Changed
 
+- **ES-module migration, step 3 — the reassigned scalars → `S` object in
+  `src/state.js`.** All 66 IIFE-scope `_foo` scalars (playback clock, audio
+  graph, mix/undo state, recording, punch, highway-record, settings) move into a
+  single exported `S` container — ES imports are read-only bindings, so
+  `export let x` can't be reassigned from `main.js`, but `S.x = …` can. Every
+  `_foo` reference becomes `S.foo` (608 sites; underscore dropped). Rewrite was
+  audited safe first: no name appears as an object key or inside a string/comment
+  literal (the string-adjacent hits were all `${}` template expressions or fn
+  args), verified 0 bare refs + 0 double-prefix after. Move-only, no behaviour
+  change. Keystone for extracting the functional modules next.
+
 - **ES-module migration, step 2 — extract pure helpers to `src/util.js`.** Nine
   state-free helpers (`_parseTimeInput`, `_formatTime`, `_formatDate`, `_esc`,
   `Path_stem`, `_eqLabel`, `_compLabel`, `_polarToCartesian`, `_describeArc`) move
