@@ -1,0 +1,4 @@
+# Runtime deps beyond what the host app already provides.
+# python-multipart: required by FastAPI for UploadFile/File form parsing
+# (track upload/import endpoints). Also installed by the org reusable CI.
+python-multipart>=0.0.30
