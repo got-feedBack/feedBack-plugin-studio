@@ -6,6 +6,14 @@ All notable changes to the Band Studio plugin are documented here.
 
 ### Changed
 
+- **ES-module migration, step 7 — extract the view layer to `src/render.js`.**
+  `_renderSessionList` / `_renderTracks` / `_renderMarkers` move out of `main.js`.
+  Pure-ish rendering: reads the `S` container + util formatters (`_esc`,
+  `_formatDate`/`_formatTime`, `_eqLabel`/`_compLabel`, `_getTrackColor`) and emits
+  HTML whose inline `on*` handlers call the `window.studio*` command surface
+  (string output — no code coupling back to `main.js`). Move-only, no behaviour
+  change.
+
 - **ES-module migration, step 6 — extract the visualisation layer to
   `src/viz.js`.** The requestAnimationFrame playhead loop (`_startAnimLoop`/
   `_stopAnimLoop`), waveform canvas rendering + zoom/scroll (`_drawWaveform`/
