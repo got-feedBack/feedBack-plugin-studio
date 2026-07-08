@@ -3,6 +3,7 @@ import {
     _eqLabel, _compLabel, _describeArc,
 } from './util.js';
 import { S } from './state.js';
+import { _loadSettings, _saveSettings } from './prefs.js';
 
 (function () {
     'use strict';
@@ -97,29 +98,8 @@ import { S } from './state.js';
 
     // Waveform peaks cache
 
-    // Settings (persisted in localStorage)
-    const STORAGE_KEY = 'slopsmith_studio';
-
     // ── Init & Settings ────────────────────────────────────────────────
-
-    function _loadSettings() {
-        try {
-            const raw = localStorage.getItem(STORAGE_KEY);
-            if (!raw) return;
-            const s = JSON.parse(raw);
-            if (s.userName) S.userName = s.userName;
-            if (s.deviceId !== undefined) S.selectedDeviceId = s.deviceId;
-        } catch (e) { /* ignore */ }
-    }
-
-    function _saveSettings() {
-        try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                userName: S.userName,
-                deviceId: S.selectedDeviceId,
-            }));
-        } catch (e) { /* ignore */ }
-    }
+    // Settings persistence (_loadSettings/_saveSettings) → src/prefs.js.
 
     _loadSettings();
 

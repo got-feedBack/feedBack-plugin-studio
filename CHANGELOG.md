@@ -6,6 +6,12 @@ All notable changes to the Band Studio plugin are documented here.
 
 ### Changed
 
+- **ES-module migration, step 4 — extract settings persistence to `src/prefs.js`.**
+  `_loadSettings` / `_saveSettings` (localStorage-backed user name + input device,
+  now reading/writing the `S` container) move to their own module with real-import
+  tests (`tests/prefs.test.mjs`, in-memory localStorage stub). `main.js` imports
+  them by the same names. Move-only, no behaviour change.
+
 - **ES-module migration, step 3 — the reassigned scalars → `S` object in
   `src/state.js`.** All 66 IIFE-scope `_foo` scalars (playback clock, audio
   graph, mix/undo state, recording, punch, highway-record, settings) move into a
