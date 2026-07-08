@@ -8,6 +8,8 @@
   },
   "screen": "screen.html",
   "script": "screen.js",
+  "scriptType": "module",
+  "minHost": "0.3.0-alpha.1",
   "routes": "routes.py",
   "category": "creation",
   "description": "Multi-track studio view.",
