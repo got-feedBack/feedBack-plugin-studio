@@ -90,7 +90,10 @@ const INSTRUMENT_COLORS = {
     other: '#50b0d0',
 };
 export function _getTrackColor(t) {
-    if (t.color) return t.color;
+    // Only trust an explicit colour if it's a valid hex — the renderer
+    // interpolates it unescaped into style/attr strings, so a non-hex value
+    // (however it got persisted) must never reach the DOM. Else fall through.
+    if (t.color && /^#[0-9a-fA-F]{3,8}$/.test(t.color)) return t.color;
     const name = (t.track_name || t.instrument || '').toLowerCase();
     for (const [key, col] of Object.entries(INSTRUMENT_COLORS)) {
         if (name.includes(key)) return col;

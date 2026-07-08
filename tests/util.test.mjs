@@ -72,4 +72,7 @@ test('_getTrackColor: explicit color wins, else instrument match, else palette b
     const c10 = _getTrackColor({ id: 10 });
     assert.equal(c0, c10);                    // wraps at 10 colours
     assert.match(c0, /^#[0-9a-f]{6}$/);
+    // a non-hex persisted colour is rejected (XSS guard) → falls through to a palette hex
+    const injected = _getTrackColor({ color: 'red" onload=alert(1)', id: 2 });
+    assert.match(injected, /^#[0-9a-f]{6}$/);
 });
