@@ -21,7 +21,10 @@ export function _formatTime(s) {
     return m + ':' + (sec < 10 ? '0' : '') + sec;
 }
 
-// ISO timestamp → locale date string (UTC-anchored); passes the input back on error.
+// ISO timestamp → host-locale date string. The appended 'Z' makes it parse as
+// UTC; rendering is in the host timezone. Empty input → ''. (The try/catch is
+// defensive — new Date / toLocaleDateString don't actually throw; invalid input
+// just yields an 'Invalid Date' string.)
 export function _formatDate(iso) {
     if (!iso) return '';
     try {
