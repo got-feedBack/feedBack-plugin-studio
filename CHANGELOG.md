@@ -7,7 +7,7 @@ All notable changes to the Band Studio plugin are documented here.
 ### Changed
 
 - **ES-module migration, step 3 — the reassigned scalars → `S` object in
-  `src/state.js`.** All 66 module-scope `_foo` scalars (playback clock, audio
+  `src/state.js`.** All 66 IIFE-scope `_foo` scalars (playback clock, audio
   graph, mix/undo state, recording, punch, highway-record, settings) move into a
   single exported `S` container — ES imports are read-only bindings, so
   `export let x` can't be reassigned from `main.js`, but `S.x = …` can. Every

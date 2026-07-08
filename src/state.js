@@ -1,6 +1,6 @@
 // Shared, reassigned module state → one container object `S`. ES imports are
 // read-only bindings, so a plain `export let x` can't be reassigned from main.js,
-// but `S.x = …` can. Every former module-scope `_foo` scalar becomes `S.foo`.
+// but `S.x = …` can. Every former IIFE-scope `_foo` scalar becomes `S.foo`.
 // (Never-reassigned constants like MAX_UNDO stay in main.js.)
 export const S = {
     // ── Session + playback clock ──
