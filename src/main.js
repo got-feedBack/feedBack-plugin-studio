@@ -1,3 +1,8 @@
+import {
+    _parseTimeInput, _formatTime, _formatDate, _esc, Path_stem,
+    _eqLabel, _compLabel, _describeArc,
+} from './util.js';
+
 (function () {
     'use strict';
 
@@ -598,18 +603,6 @@
         }
 
         container.innerHTML = html;
-    }
-
-    function _eqLabel(st) {
-        const l = st.eq_low || 0, m = st.eq_mid || 0, h = st.eq_high || 0;
-        if (l === 0 && m === 0 && h === 0) return 'Flat';
-        return `${l > 0 ? '+' : ''}${l} / ${m > 0 ? '+' : ''}${m} / ${h > 0 ? '+' : ''}${h} dB`;
-    }
-
-    function _compLabel(st) {
-        const r = st.comp_ratio ?? 1;
-        if (r <= 1) return 'Off';
-        return `${st.comp_threshold ?? -24}dB ${r}:1`;
     }
 
     // ── Playback (Web Audio API) ───────────────────────────────────────
@@ -1227,17 +1220,6 @@
             opt.textContent = name;
             sel.appendChild(opt);
         }
-    }
-
-    function _parseTimeInput(val) {
-        // Parse "M:SS" or "M:SS.ms" or plain seconds
-        val = (val || '').trim();
-        const match = val.match(/^(\d+):(\d{1,2})(?:\.(\d+))?$/);
-        if (match) {
-            return parseInt(match[1]) * 60 + parseInt(match[2]) + (match[3] ? parseFloat('0.' + match[3]) : 0);
-        }
-        const n = parseFloat(val);
-        return isNaN(n) ? 0 : n;
     }
 
     window.studioPunchSetIn = function () {
@@ -1976,10 +1958,6 @@
         fileInput.value = '';
     };
 
-    function Path_stem(filename) {
-        return filename ? filename.replace(/\.[^.]+$/, '') : '';
-    }
-
     window.studioActivateTake = async function (trackId) {
         try {
             await fetch(`/api/plugins/studio/tracks/${trackId}/activate`, { method: 'POST' });
@@ -2561,18 +2539,6 @@
     }
 
     // SVG arc helper
-    function _describeArc(cx, cy, r, startAngle, endAngle) {
-        const start = _polarToCartesian(cx, cy, r, endAngle - 90);
-        const end = _polarToCartesian(cx, cy, r, startAngle - 90);
-        const largeArc = endAngle - startAngle <= 180 ? '0' : '1';
-        return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`;
-    }
-
-    function _polarToCartesian(cx, cy, r, angleDeg) {
-        const rad = angleDeg * Math.PI / 180;
-        return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-    }
-
     // ── Markers ────────────────────────────────────────────────────────
 
     function _renderMarkers() {
@@ -2792,29 +2758,6 @@
     }
 
     // ── Helpers ────────────────────────────────────────────────────────
-
-    function _formatTime(s) {
-        if (!s || isNaN(s)) return '0:00';
-        const m = Math.floor(s / 60);
-        const sec = Math.floor(s % 60);
-        return m + ':' + (sec < 10 ? '0' : '') + sec;
-    }
-
-    function _formatDate(iso) {
-        if (!iso) return '';
-        try {
-            const d = new Date(iso + 'Z');
-            return d.toLocaleDateString();
-        } catch (e) {
-            return iso;
-        }
-    }
-
-    function _esc(str) {
-        if (!str) return '';
-        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
 
     window.__slopsmithStudioHooksInstalling = true;
     try {
