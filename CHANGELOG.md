@@ -17,5 +17,6 @@ All notable changes to the Band Studio plugin are documented here.
   The `window.showScreen`-wrap re-init and the `__slopsmithStudioHooksInstalled`
   idempotency guard (constitution §V) are runtime mechanisms, preserved as-is.
   This is the R1b pilot's core validation: a plugin with inline-handler + wrap-based
-  re-init edges (which stems lacked) loads and re-inits cleanly as a module.
-  No `src/` split yet — that follows in later steps.
+  re-init edges (which stems lacked) loads and re-inits cleanly as a module. The
+  body isn't split into multiple modules yet — `src/main.js` is still the whole
+  IIFE; the layered `src/**` extraction follows in later steps.
