@@ -6,6 +6,16 @@ All notable changes to the Band Studio plugin are documented here.
 
 ### Changed
 
+- **ES-module migration, step 8 — extract undo/redo + mix-save to `src/undo.js`.**
+  `_pushUndo`/`_captureUndoNow` (debounced snapshots, §VI), `_updateUndoButtons`,
+  `_applyRestoredMixState` (re-applies a snapshot to the live graph + re-renders),
+  and `_debounceSaveMix` (debounced server persist) + `MAX_UNDO` move out of
+  `main.js`. `_applyRestoredMixState` imports the lower layers it drives
+  (audio-graph `_applyAllMixToLive`/`_getAudioCtx`, viz `_drawAllCursors`, render
+  `_renderTracks`) — one-way, no cycle. `window.studioUndo`/`studioRedo` stay in
+  main (command surface) and call the imported helpers. Move-only, no behaviour
+  change.
+
 - **ES-module migration, step 7 — extract the view layer to `src/render.js`.**
   `_renderSessionList` / `_renderTracks` / `_renderMarkers` move out of `main.js`.
   Pure-ish rendering: reads the `S` container + util formatters (`_esc`,
