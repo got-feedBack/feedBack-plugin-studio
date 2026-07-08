@@ -6,6 +6,16 @@ All notable changes to the Band Studio plugin are documented here.
 
 ### Changed
 
+- **ES-module migration, step 5 — extract the Web Audio engine to
+  `src/audio-graph.js`.** The playback graph (`_getAudioCtx`, `_createReverbBus`,
+  `_play`/`_pause`, `_stopAllSources`, `_applyMixToLiveAudio`/`_applyAllMixToLive`,
+  `_hasSoloActive`) moves out of `main.js`. It's the lower audio layer — the
+  per-frame playhead loop + master meter it kicks off (`_startAnimLoop`/
+  `_stopAnimLoop`/`_startMasterMeter`, which live with the animation/render layer)
+  are injected via `configureAudioGraph({...})` at boot, so audio-graph doesn't
+  import back into `main.js` (no cycle). Bodies moved verbatim bar the hook calls.
+  Move-only, no behaviour change.
+
 - **ES-module migration, step 4 — extract settings persistence to `src/prefs.js`.**
   `_loadSettings` / `_saveSettings` (localStorage-backed user name + input device,
   now reading/writing the `S` container) move to their own module with real-import
