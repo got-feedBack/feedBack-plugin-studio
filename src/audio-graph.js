@@ -223,7 +223,7 @@ export function _applyMixToLiveAudio(trackKey) {
     const hasSolo = _hasSoloActive();
     if (trackKey === 'original') {
         if (S.songGain && S.songPan) {
-            const st = S.mixState.original;
+            const st = S.mixState.original || { volume: 1.0, pan: 0.0, muted: false, solo: false };
             S.songGain.gain.value = st.muted ? 0 : (hasSolo && !st.solo ? 0 : st.volume);
             S.songPan.pan.value = st.pan;
         }
