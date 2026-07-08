@@ -8,10 +8,10 @@ import { S } from './state.js';
 let startAnimLoop = () => {};
 let stopAnimLoop = () => {};
 let startMasterMeter = () => {};
-export function configureAudioGraph(h) {
-    if (h.startAnimLoop) startAnimLoop = h.startAnimLoop;
-    if (h.stopAnimLoop) stopAnimLoop = h.stopAnimLoop;
-    if (h.startMasterMeter) startMasterMeter = h.startMasterMeter;
+export function configureAudioGraph(h = {}) {
+    if (typeof h.startAnimLoop === 'function') startAnimLoop = h.startAnimLoop;
+    if (typeof h.stopAnimLoop === 'function') stopAnimLoop = h.stopAnimLoop;
+    if (typeof h.startMasterMeter === 'function') startMasterMeter = h.startMasterMeter;
 }
 
 export function _getAudioCtx() {
@@ -43,7 +43,7 @@ function _createReverbBus(ctx) {
 export function _play() {
     if (S.isPlaying) return;
     const ctx = _getAudioCtx();
-    if (ctx.state === 'suspended') ctx.resume();
+    if (ctx.state === 'suspended') { const p = ctx.resume(); if (p && p.catch) p.catch(() => {}); }
 
     S.isPlaying = true;
     S.startTime = ctx.currentTime - S.pauseOffset;
