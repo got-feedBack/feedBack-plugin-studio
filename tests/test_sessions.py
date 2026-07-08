@@ -1,5 +1,9 @@
 """Session CRUD."""
 
+import sqlite3
+
+from conftest import SONG_FILENAME
+
 BASE = "/api/plugins/studio/sessions"
 
 
@@ -14,7 +18,7 @@ def test_create_and_get_session(client, session):
     assert r.status_code == 200
     body = r.json()
     assert body["name"] == "Jam"
-    assert body["song_filename"] == "song.sloppak"
+    assert body["song_filename"] == SONG_FILENAME
     assert body["created_by"] == "pytest"
     assert body["master_volume"] == 1.0
     assert body["master_limiter"] == 1
@@ -34,12 +38,23 @@ def test_list_sessions_with_track_count(client, session, track):
     assert rows[0]["track_count"] == 1
 
 
-def test_delete_session_cascades(client, session, track):
+def test_delete_session_cascades(client, session, track, config_dir):
     client.post(f"{BASE}/{session}/markers", json={"time": 1.0, "name": "M"})
     assert client.delete(f"{BASE}/{session}").json() == {"ok": True}
     assert client.get(f"{BASE}/{session}").status_code == 404
     assert client.get(BASE).json() == []
     assert client.get(f"{BASE}/{session}/mix-settings").json() == []
+    # The deleted session's GET is a 404, so verify marker/track cascade
+    # directly in the database.
+    db = sqlite3.connect(config_dir / "studio.db")
+    try:
+        for table in ("studio_markers", "studio_tracks", "studio_mix_settings"):
+            count = db.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE session_id = ?", (session,)
+            ).fetchone()[0]
+            assert count == 0, f"{table} rows survived session delete"
+    finally:
+        db.close()
 
 
 def test_master_settings_persist(client, session):

@@ -1,5 +1,7 @@
 """Markers and mix-settings persistence."""
 
+from conftest import SONG_FILENAME
+
 SESSIONS = "/api/plugins/studio/sessions"
 MARKERS = "/api/plugins/studio/markers"
 
@@ -37,8 +39,8 @@ def test_rename_and_delete_marker(client, session):
 
 
 def test_import_markers_from_song_meta(client, session, dlc_dir, meta_db):
-    (dlc_dir / "song.sloppak").write_bytes(b"x")
-    meta_db.meta["song.sloppak"] = {"sections": [
+    (dlc_dir / SONG_FILENAME).write_bytes(b"x")
+    meta_db.meta[SONG_FILENAME] = {"sections": [
         {"name": "Intro", "start_time": 0.0},
         {"name": "Verse", "start_time": 20.0},
     ]}
@@ -56,8 +58,8 @@ def test_import_markers_error_paths(client, session, dlc_dir, meta_db):
     # No metadata available.
     assert client.post(f"{SESSIONS}/{session}/import-markers").status_code == 400
     # Metadata but no sections.
-    (dlc_dir / "song.sloppak").write_bytes(b"x")
-    meta_db.meta["song.sloppak"] = {"sections": []}
+    (dlc_dir / SONG_FILENAME).write_bytes(b"x")
+    meta_db.meta[SONG_FILENAME] = {"sections": []}
     assert client.post(f"{SESSIONS}/{session}/import-markers").status_code == 400
 
 

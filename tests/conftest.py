@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import routes  # noqa: E402
 
+SONG_FILENAME = "song.sloppak"
+
 
 class FakeMetaDb:
     """Stands in for the host's song-metadata cache."""
@@ -34,10 +36,15 @@ def meta_db():
 
 
 @pytest.fixture
-def client(tmp_path, dlc_dir, meta_db):
+def config_dir(tmp_path):
+    return tmp_path / "config"
+
+
+@pytest.fixture
+def client(config_dir, dlc_dir, meta_db):
     app = FastAPI()
     context = {
-        "config_dir": tmp_path / "config",
+        "config_dir": config_dir,
         "get_dlc_dir": lambda: dlc_dir,
         "meta_db": meta_db,
     }
@@ -51,7 +58,7 @@ def session(client):
     """A created session; returns its id."""
     r = client.post(
         "/api/plugins/studio/sessions",
-        json={"song_filename": "song.sloppak", "name": "Jam", "created_by": "pytest"},
+        json={"song_filename": SONG_FILENAME, "name": "Jam", "created_by": "pytest"},
     )
     assert r.status_code == 200, r.text
     return r.json()["id"]
