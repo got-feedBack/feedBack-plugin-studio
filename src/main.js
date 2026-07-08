@@ -2,6 +2,7 @@ import {
     _parseTimeInput, _formatTime, _formatDate, _esc, Path_stem,
     _eqLabel, _compLabel, _describeArc,
 } from './util.js';
+import { S } from './state.js';
 
 (function () {
     'use strict';
@@ -16,87 +17,57 @@ import {
     // the DOM via window.showScreen.
     if (window.__slopsmithStudioHooksInstalled || window.__slopsmithStudioHooksInstalling) return;
     // ── State ──────────────────────────────────────────────────────────
-    let _currentSession = null;     // full session object from API
-    let _audioCtx = null;           // Web Audio context
-    let _songBuffer = null;         // decoded AudioBuffer for original song
-    let _trackBuffers = {};         // track_id -> AudioBuffer
-    let _isPlaying = false;
-    let _startTime = 0;             // audioCtx.currentTime when play began
-    let _pauseOffset = 0;           // seconds into the song when paused
-    let _duration = 0;              // total duration in seconds
-    let _animFrame = null;
 
     // Zoom & scroll state
-    let _zoomLevel = 1;             // 1 = fit entire song, 2 = 2x zoom, etc.
-    let _scrollOffset = 0;          // start time in seconds of the visible window
 
     // Source nodes (recreated each play)
-    let _songSource = null;
-    let _songGain = null;
-    let _songPan = null;
-    let _trackSources = {};         // track_id -> {source, gain, pan, ...}
-    let _reverbNode = null;         // shared ConvolverNode
-    let _reverbGain = null;         // master reverb wet level
-    let _masterGain = null;         // master bus gain
-    let _masterLimiter = null;      // master bus limiter (DynamicsCompressor)
-    let _masterAnalyser = null;     // for level meter
-    let _masterMeterInterval = null;
-    let _masterVolume = 1.0;
-    let _masterLimiterOn = true;
 
     // Mix state (client-side, synced to server)
-    let _mixState = {
-        original: { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 },
-        // track_id -> {volume, pan, muted, solo}
-    };
 
     // Undo/redo
-    let _undoStack = [];
-    let _redoStack = [];
     const MAX_UNDO = 50;
-    let _undoDebounceTimer = null;
 
     function _pushUndo() {
         // Debounce: don't capture every slider tick, wait for a pause
-        if (_undoDebounceTimer) clearTimeout(_undoDebounceTimer);
-        _undoDebounceTimer = setTimeout(() => {
-            const snapshot = JSON.stringify(_mixState);
+        if (S.undoDebounceTimer) clearTimeout(S.undoDebounceTimer);
+        S.undoDebounceTimer = setTimeout(() => {
+            const snapshot = JSON.stringify(S.mixState);
             // Don't push if identical to last
-            if (_undoStack.length && _undoStack[_undoStack.length - 1] === snapshot) return;
-            _undoStack.push(snapshot);
-            if (_undoStack.length > MAX_UNDO) _undoStack.shift();
-            _redoStack = []; // new change clears redo
+            if (S.undoStack.length && S.undoStack[S.undoStack.length - 1] === snapshot) return;
+            S.undoStack.push(snapshot);
+            if (S.undoStack.length > MAX_UNDO) S.undoStack.shift();
+            S.redoStack = []; // new change clears redo
             _updateUndoButtons();
         }, 500);
     }
 
     function _captureUndoNow() {
         // Immediate capture (for discrete actions like mute/solo toggles)
-        if (_undoDebounceTimer) clearTimeout(_undoDebounceTimer);
-        const snapshot = JSON.stringify(_mixState);
-        if (_undoStack.length && _undoStack[_undoStack.length - 1] === snapshot) return;
-        _undoStack.push(snapshot);
-        if (_undoStack.length > MAX_UNDO) _undoStack.shift();
-        _redoStack = [];
+        if (S.undoDebounceTimer) clearTimeout(S.undoDebounceTimer);
+        const snapshot = JSON.stringify(S.mixState);
+        if (S.undoStack.length && S.undoStack[S.undoStack.length - 1] === snapshot) return;
+        S.undoStack.push(snapshot);
+        if (S.undoStack.length > MAX_UNDO) S.undoStack.shift();
+        S.redoStack = [];
         _updateUndoButtons();
     }
 
     window.studioUndo = function () {
-        if (!_undoStack.length) return;
+        if (!S.undoStack.length) return;
         // Save current state to redo
-        _redoStack.push(JSON.stringify(_mixState));
+        S.redoStack.push(JSON.stringify(S.mixState));
         // Restore previous
-        const snapshot = _undoStack.pop();
-        _mixState = JSON.parse(snapshot);
+        const snapshot = S.undoStack.pop();
+        S.mixState = JSON.parse(snapshot);
         _applyRestoredMixState();
     };
 
     window.studioRedo = function () {
-        if (!_redoStack.length) return;
+        if (!S.redoStack.length) return;
         // Save current state to undo
-        _undoStack.push(JSON.stringify(_mixState));
-        const snapshot = _redoStack.pop();
-        _mixState = JSON.parse(snapshot);
+        S.undoStack.push(JSON.stringify(S.mixState));
+        const snapshot = S.redoStack.pop();
+        S.mixState = JSON.parse(snapshot);
         _applyRestoredMixState();
     };
 
@@ -109,34 +80,25 @@ import {
         _debounceSaveMix();
         _updateUndoButtons();
         // Redraw waveforms
-        const curTime = _isPlaying ? (_getAudioCtx().currentTime - _startTime) : _pauseOffset;
+        const curTime = S.isPlaying ? (_getAudioCtx().currentTime - S.startTime) : S.pauseOffset;
         _drawAllCursors(curTime);
     }
 
     function _updateUndoButtons() {
         const undoBtn = document.getElementById('studio-btn-undo');
         const redoBtn = document.getElementById('studio-btn-redo');
-        if (undoBtn) undoBtn.disabled = !_undoStack.length;
-        if (redoBtn) redoBtn.disabled = !_redoStack.length;
-        if (undoBtn) undoBtn.classList.toggle('opacity-30', !_undoStack.length);
-        if (redoBtn) redoBtn.classList.toggle('opacity-30', !_redoStack.length);
+        if (undoBtn) undoBtn.disabled = !S.undoStack.length;
+        if (redoBtn) redoBtn.disabled = !S.redoStack.length;
+        if (undoBtn) undoBtn.classList.toggle('opacity-30', !S.undoStack.length);
+        if (redoBtn) redoBtn.classList.toggle('opacity-30', !S.redoStack.length);
     }
 
     // Recording
-    let _isRecording = false;
-    let _mediaStream = null;
-    let _mediaRecorder = null;
-    let _recordedChunks = [];
-    let _recStartTime = 0;
-    let _recInterval = null;
 
     // Waveform peaks cache
-    let _waveformPeaks = {};        // key -> Float32Array
 
     // Settings (persisted in localStorage)
     const STORAGE_KEY = 'slopsmith_studio';
-    let _userName = '';
-    let _selectedDeviceId = '';
 
     // ── Init & Settings ────────────────────────────────────────────────
 
@@ -145,16 +107,16 @@ import {
             const raw = localStorage.getItem(STORAGE_KEY);
             if (!raw) return;
             const s = JSON.parse(raw);
-            if (s.userName) _userName = s.userName;
-            if (s.deviceId !== undefined) _selectedDeviceId = s.deviceId;
+            if (s.userName) S.userName = s.userName;
+            if (s.deviceId !== undefined) S.selectedDeviceId = s.deviceId;
         } catch (e) { /* ignore */ }
     }
 
     function _saveSettings() {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                userName: _userName,
-                deviceId: _selectedDeviceId,
+                userName: S.userName,
+                deviceId: S.selectedDeviceId,
             }));
         } catch (e) { /* ignore */ }
     }
@@ -167,10 +129,10 @@ import {
         await _loadSessionList();
         _populateDevices();
         const nameInput = document.getElementById('studio-user-name');
-        if (nameInput && _userName) nameInput.value = _userName;
+        if (nameInput && S.userName) nameInput.value = S.userName;
         // If we came back from the player with a session open, reload it
         // so any recordings made on the highway show up immediately
-        if (_currentSession) {
+        if (S.currentSession) {
             const mixerView = document.getElementById('studio-mixer-view');
             if (mixerView && !mixerView.classList.contains('hidden')) {
                 await _reloadSession();
@@ -281,7 +243,7 @@ import {
         }
 
         if (userName) {
-            _userName = userName;
+            S.userName = userName;
             _saveSettings();
         }
 
@@ -289,7 +251,7 @@ import {
             const resp = await fetch('/api/plugins/studio/sessions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ song_filename: filename, name, created_by: _userName }),
+                body: JSON.stringify({ song_filename: filename, name, created_by: S.userName }),
             });
             const data = await resp.json();
             if (data.error) { alert(data.error); return; }
@@ -321,9 +283,9 @@ import {
         _cleanup();
         try {
             const resp = await fetch(`/api/plugins/studio/sessions/${id}`);
-            _currentSession = await resp.json();
-            if (_currentSession.error) {
-                alert(_currentSession.error);
+            S.currentSession = await resp.json();
+            if (S.currentSession.error) {
+                alert(S.currentSession.error);
                 return;
             }
         } catch (e) {
@@ -336,17 +298,17 @@ import {
         document.getElementById('studio-mixer-view').classList.remove('hidden');
 
         // Populate header
-        document.getElementById('studio-session-title').textContent = _currentSession.name;
-        const meta = _currentSession.song_meta;
-        const songLabel = meta ? `${meta.title} - ${meta.artist}` : _currentSession.song_filename;
+        document.getElementById('studio-session-title').textContent = S.currentSession.name;
+        const meta = S.currentSession.song_meta;
+        const songLabel = meta ? `${meta.title} - ${meta.artist}` : S.currentSession.song_filename;
         document.getElementById('studio-session-song').textContent = songLabel;
 
         // Load mix settings
         try {
-            const resp = await fetch(`/api/plugins/studio/sessions/${_currentSession.id}/mix-settings`);
+            const resp = await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}/mix-settings`);
             const settings = await resp.json();
             for (const s of settings) {
-                _mixState[s.track_id] = {
+                S.mixState[s.track_id] = {
                     volume: s.volume,
                     pan: s.pan,
                     muted: !!s.muted,
@@ -370,16 +332,16 @@ import {
         _loadSongAudio();
 
         // Reset undo/redo
-        _undoStack = [];
-        _redoStack = [];
+        S.undoStack = [];
+        S.redoStack = [];
 
         // Load master settings
-        _masterVolume = _currentSession.master_volume ?? 1.0;
-        _masterLimiterOn = _currentSession.master_limiter !== 0;
+        S.masterVolume = S.currentSession.master_volume ?? 1.0;
+        S.masterLimiterOn = S.currentSession.master_limiter !== 0;
 
         // Reset zoom
-        _zoomLevel = 1;
-        _scrollOffset = 0;
+        S.zoomLevel = 1;
+        S.scrollOffset = 0;
 
         // Render tracks and markers
         _renderTracks();
@@ -401,10 +363,10 @@ import {
     // ── Audio Loading ──────────────────────────────────────────────────
 
     function _getAudioCtx() {
-        if (!_audioCtx) {
-            _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (!S.audioCtx) {
+            S.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         }
-        return _audioCtx;
+        return S.audioCtx;
     }
 
     function _createReverbBus(ctx) {
@@ -418,49 +380,49 @@ import {
                 data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 2.5);
             }
         }
-        _reverbNode = ctx.createConvolver();
-        _reverbNode.buffer = impulse;
-        _reverbGain = ctx.createGain();
-        _reverbGain.gain.value = 0.7; // master wet level
-        const reverbDest = _masterGain || ctx.destination;
-        _reverbNode.connect(_reverbGain).connect(reverbDest);
+        S.reverbNode = ctx.createConvolver();
+        S.reverbNode.buffer = impulse;
+        S.reverbGain = ctx.createGain();
+        S.reverbGain.gain.value = 0.7; // master wet level
+        const reverbDest = S.masterGain || ctx.destination;
+        S.reverbNode.connect(S.reverbGain).connect(reverbDest);
     }
 
     async function _loadSongAudio() {
         try {
-            const resp = await fetch(`/api/plugins/studio/sessions/${_currentSession.id}/song-audio`);
+            const resp = await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}/song-audio`);
             const data = await resp.json();
             if (!data.url) return;
             const audioResp = await fetch(data.url);
             const arrayBuf = await audioResp.arrayBuffer();
             const ctx = _getAudioCtx();
-            _songBuffer = await ctx.decodeAudioData(arrayBuf);
-            _duration = _songBuffer.duration;
-            document.getElementById('studio-time-total').textContent = _formatTime(_duration);
-            document.getElementById('studio-seek-bar').max = _duration;
-            _drawWaveform('original', _songBuffer, document.getElementById('studio-waveform-original'));
+            S.songBuffer = await ctx.decodeAudioData(arrayBuf);
+            S.duration = S.songBuffer.duration;
+            document.getElementById('studio-time-total').textContent = _formatTime(S.duration);
+            document.getElementById('studio-seek-bar').max = S.duration;
+            _drawWaveform('original', S.songBuffer, document.getElementById('studio-waveform-original'));
         } catch (e) {
             console.error('[Studio] Failed to load song audio:', e);
         }
     }
 
     async function _loadTrackAudio() {
-        if (!_currentSession || !_currentSession.tracks) return;
+        if (!S.currentSession || !S.currentSession.tracks) return;
         const ctx = _getAudioCtx();
-        for (const t of _currentSession.tracks) {
+        for (const t of S.currentSession.tracks) {
             try {
                 const resp = await fetch(`/api/plugins/studio/tracks/${t.id}/audio`);
                 const arrayBuf = await resp.arrayBuffer();
-                _trackBuffers[t.id] = await ctx.decodeAudioData(arrayBuf);
+                S.trackBuffers[t.id] = await ctx.decodeAudioData(arrayBuf);
                 // Update duration if track is longer
-                if (_trackBuffers[t.id].duration > _duration) {
-                    _duration = _trackBuffers[t.id].duration;
-                    document.getElementById('studio-time-total').textContent = _formatTime(_duration);
-                    document.getElementById('studio-seek-bar').max = _duration;
+                if (S.trackBuffers[t.id].duration > S.duration) {
+                    S.duration = S.trackBuffers[t.id].duration;
+                    document.getElementById('studio-time-total').textContent = _formatTime(S.duration);
+                    document.getElementById('studio-seek-bar').max = S.duration;
                 }
                 // Draw waveform
                 const canvas = document.getElementById(`studio-waveform-${t.id}`);
-                if (canvas) _drawWaveform(t.id, _trackBuffers[t.id], canvas);
+                if (canvas) _drawWaveform(t.id, S.trackBuffers[t.id], canvas);
             } catch (e) {
                 console.error(`[Studio] Failed to load track ${t.id}:`, e);
             }
@@ -506,11 +468,11 @@ import {
     function _renderTracks() {
         const container = document.getElementById('studio-recorded-tracks');
         if (!container) return;
-        const tracks = _currentSession.tracks || [];
+        const tracks = S.currentSession.tracks || [];
 
         let html = '';
         for (const t of tracks) {
-            const state = _mixState[t.id] || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+            const state = S.mixState[t.id] || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
             const displayName = t.track_name || t.instrument || `Track ${t.id}`;
             const color = _getTrackColor(t);
             const hasAudio = t.audio_path && t.duration > 0;
@@ -608,7 +570,7 @@ import {
     // ── Playback (Web Audio API) ───────────────────────────────────────
 
     window.studioTogglePlay = function () {
-        if (_isPlaying) {
+        if (S.isPlaying) {
             _pause();
         } else {
             _play();
@@ -616,29 +578,29 @@ import {
     };
 
     function _play() {
-        if (_isPlaying) return;
+        if (S.isPlaying) return;
         const ctx = _getAudioCtx();
         if (ctx.state === 'suspended') ctx.resume();
 
-        _isPlaying = true;
-        _startTime = ctx.currentTime - _pauseOffset;
+        S.isPlaying = true;
+        S.startTime = ctx.currentTime - S.pauseOffset;
 
         // Create master bus: gain → limiter → analyser → destination
-        _masterGain = ctx.createGain();
-        _masterGain.gain.value = _masterVolume;
-        _masterAnalyser = ctx.createAnalyser();
-        _masterAnalyser.fftSize = 256;
+        S.masterGain = ctx.createGain();
+        S.masterGain.gain.value = S.masterVolume;
+        S.masterAnalyser = ctx.createAnalyser();
+        S.masterAnalyser.fftSize = 256;
 
-        if (_masterLimiterOn) {
-            _masterLimiter = ctx.createDynamicsCompressor();
-            _masterLimiter.threshold.value = -1;  // limit at ~0dBFS
-            _masterLimiter.knee.value = 0;
-            _masterLimiter.ratio.value = 20;      // hard limiting
-            _masterLimiter.attack.value = 0.003;
-            _masterLimiter.release.value = 0.05;
-            _masterGain.connect(_masterLimiter).connect(_masterAnalyser).connect(ctx.destination);
+        if (S.masterLimiterOn) {
+            S.masterLimiter = ctx.createDynamicsCompressor();
+            S.masterLimiter.threshold.value = -1;  // limit at ~0dBFS
+            S.masterLimiter.knee.value = 0;
+            S.masterLimiter.ratio.value = 20;      // hard limiting
+            S.masterLimiter.attack.value = 0.003;
+            S.masterLimiter.release.value = 0.05;
+            S.masterGain.connect(S.masterLimiter).connect(S.masterAnalyser).connect(ctx.destination);
         } else {
-            _masterGain.connect(_masterAnalyser).connect(ctx.destination);
+            S.masterGain.connect(S.masterAnalyser).connect(ctx.destination);
         }
 
         // Create shared reverb bus (feeds into master)
@@ -651,30 +613,30 @@ import {
         const hasSolo = _hasSoloActive();
 
         // Play original song
-        if (_songBuffer) {
-            _songSource = ctx.createBufferSource();
-            _songSource.buffer = _songBuffer;
-            _songGain = ctx.createGain();
-            _songPan = ctx.createStereoPanner();
+        if (S.songBuffer) {
+            S.songSource = ctx.createBufferSource();
+            S.songSource.buffer = S.songBuffer;
+            S.songGain = ctx.createGain();
+            S.songPan = ctx.createStereoPanner();
 
-            const origState = _mixState.original || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
-            _songGain.gain.value = origState.muted ? 0 : (hasSolo && !origState.solo ? 0 : origState.volume);
-            _songPan.pan.value = origState.pan;
+            const origState = S.mixState.original || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+            S.songGain.gain.value = origState.muted ? 0 : (hasSolo && !origState.solo ? 0 : origState.volume);
+            S.songPan.pan.value = origState.pan;
 
-            _songSource.connect(_songGain).connect(_songPan).connect(_masterGain);
-            _songSource.start(0, _pauseOffset);
+            S.songSource.connect(S.songGain).connect(S.songPan).connect(S.masterGain);
+            S.songSource.start(0, S.pauseOffset);
         }
 
         // Play recorded tracks
-        if (_currentSession && _currentSession.tracks) {
-            for (const t of _currentSession.tracks) {
-                const buf = _trackBuffers[t.id];
+        if (S.currentSession && S.currentSession.tracks) {
+            for (const t of S.currentSession.tracks) {
+                const buf = S.trackBuffers[t.id];
                 if (!buf) continue;
 
                 const source = ctx.createBufferSource();
                 source.buffer = buf;
 
-                const st = _mixState[t.id] || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+                const st = S.mixState[t.id] || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
 
                 // EQ: 3-band shelving/peaking filters
                 const eqLow = ctx.createBiquadFilter();
@@ -708,14 +670,14 @@ import {
                 pan.pan.value = st.pan;
 
                 if ((st.comp_ratio ?? 1) > 1) {
-                    source.connect(eqLow).connect(eqMid).connect(eqHigh).connect(comp).connect(gain).connect(pan).connect(_masterGain);
+                    source.connect(eqLow).connect(eqMid).connect(eqHigh).connect(comp).connect(gain).connect(pan).connect(S.masterGain);
                 } else {
-                    source.connect(eqLow).connect(eqMid).connect(eqHigh).connect(gain).connect(pan).connect(_masterGain);
+                    source.connect(eqLow).connect(eqMid).connect(eqHigh).connect(gain).connect(pan).connect(S.masterGain);
                 }
 
                 // Apply time offset: positive = delay (start later), negative = trim start
                 const offsetSec = (st.offset_ms || 0) / 1000;
-                const trackPauseOffset = _pauseOffset - offsetSec;
+                const trackPauseOffset = S.pauseOffset - offsetSec;
                 let sourceStartTime = ctx.currentTime;
                 if (trackPauseOffset >= 0 && trackPauseOffset < buf.duration) {
                     source.start(0, trackPauseOffset);
@@ -747,14 +709,14 @@ import {
                 // Reverb send: tap after EQ, before compressor/gain
                 let reverbSend = null;
                 const sendLevel = st.reverb_send || 0;
-                if (sendLevel > 0 && _reverbNode) {
+                if (sendLevel > 0 && S.reverbNode) {
                     reverbSend = ctx.createGain();
                     reverbSend.gain.value = sendLevel;
                     eqHigh.connect(reverbSend);
-                    reverbSend.connect(_reverbNode);
+                    reverbSend.connect(S.reverbNode);
                 }
 
-                _trackSources[t.id] = { source, gain, pan, eqLow, eqMid, eqHigh, comp, reverbSend };
+                S.trackSources[t.id] = { source, gain, pan, eqLow, eqMid, eqHigh, comp, reverbSend };
             }
         }
 
@@ -763,19 +725,19 @@ import {
     }
 
     function _pause() {
-        if (!_isPlaying) return;
+        if (!S.isPlaying) return;
         const ctx = _getAudioCtx();
-        _pauseOffset = ctx.currentTime - _startTime;
+        S.pauseOffset = ctx.currentTime - S.startTime;
         _stopAllSources();
-        _isPlaying = false;
+        S.isPlaying = false;
         document.getElementById('studio-btn-play').innerHTML = '&#9654; Play';
         _stopAnimLoop();
     }
 
     window.studioStop = function () {
         _stopAllSources();
-        _isPlaying = false;
-        _pauseOffset = 0;
+        S.isPlaying = false;
+        S.pauseOffset = 0;
         document.getElementById('studio-btn-play').innerHTML = '&#9654; Play';
         document.getElementById('studio-time-current').textContent = '0:00';
         document.getElementById('studio-seek-bar').value = 0;
@@ -783,35 +745,35 @@ import {
         _drawAllCursors(0);
 
         // Stop recording if active
-        if (_isRecording) {
+        if (S.isRecording) {
             _stopRecording();
         }
     };
 
     function _stopAllSources() {
-        try { if (_songSource) _songSource.stop(); } catch (e) { /* ignore */ }
-        _songSource = null;
-        for (const key of Object.keys(_trackSources)) {
-            try { _trackSources[key].source.stop(); } catch (e) { /* ignore */ }
+        try { if (S.songSource) S.songSource.stop(); } catch (e) { /* ignore */ }
+        S.songSource = null;
+        for (const key of Object.keys(S.trackSources)) {
+            try { S.trackSources[key].source.stop(); } catch (e) { /* ignore */ }
         }
-        _trackSources = {};
-        _reverbNode = null;
-        _reverbGain = null;
-        _masterGain = null;
-        _masterLimiter = null;
-        _masterAnalyser = null;
-        if (_masterMeterInterval) { clearInterval(_masterMeterInterval); _masterMeterInterval = null; }
+        S.trackSources = {};
+        S.reverbNode = null;
+        S.reverbGain = null;
+        S.masterGain = null;
+        S.masterLimiter = null;
+        S.masterAnalyser = null;
+        if (S.masterMeterInterval) { clearInterval(S.masterMeterInterval); S.masterMeterInterval = null; }
     }
 
     window.studioSeek = function (val) {
         const t = parseFloat(val);
-        if (_isPlaying) {
+        if (S.isPlaying) {
             _stopAllSources();
-            _isPlaying = false;
-            _pauseOffset = t;
+            S.isPlaying = false;
+            S.pauseOffset = t;
             _play();
         } else {
-            _pauseOffset = t;
+            S.pauseOffset = t;
             document.getElementById('studio-time-current').textContent = _formatTime(t);
             _drawAllCursors(t);
         }
@@ -821,8 +783,8 @@ import {
         const rect = canvas.getBoundingClientRect();
         const x = event.clientX - rect.left;
         const pct = x / rect.width;
-        const visibleDur = _duration / _zoomLevel;
-        const t = _scrollOffset + pct * visibleDur;
+        const visibleDur = S.duration / S.zoomLevel;
+        const t = S.scrollOffset + pct * visibleDur;
         studioSeek(t);
         document.getElementById('studio-seek-bar').value = t;
     };
@@ -832,25 +794,25 @@ import {
     function _startAnimLoop() {
         _stopAnimLoop();
         function tick() {
-            if (!_isPlaying) return;
+            if (!S.isPlaying) return;
             const ctx = _getAudioCtx();
-            const elapsed = ctx.currentTime - _startTime;
+            const elapsed = ctx.currentTime - S.startTime;
             document.getElementById('studio-time-current').textContent = _formatTime(elapsed);
             document.getElementById('studio-seek-bar').value = elapsed;
             _drawAllCursors(elapsed);
-            if (elapsed >= _duration) {
+            if (elapsed >= S.duration) {
                 studioStop();
                 return;
             }
-            _animFrame = requestAnimationFrame(tick);
+            S.animFrame = requestAnimationFrame(tick);
         }
-        _animFrame = requestAnimationFrame(tick);
+        S.animFrame = requestAnimationFrame(tick);
     }
 
     function _stopAnimLoop() {
-        if (_animFrame) {
-            cancelAnimationFrame(_animFrame);
-            _animFrame = null;
+        if (S.animFrame) {
+            cancelAnimationFrame(S.animFrame);
+            S.animFrame = null;
         }
     }
 
@@ -859,8 +821,8 @@ import {
     window.studioSetVolume = function (trackKey, value) {
         _pushUndo();
         const v = Math.max(0, Math.min(1.5, parseFloat(value)));
-        if (!_mixState[trackKey]) _mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
-        _mixState[trackKey].volume = v;
+        if (!S.mixState[trackKey]) S.mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+        S.mixState[trackKey].volume = v;
         _applyMixToLiveAudio(trackKey);
         _debounceSaveMix();
     };
@@ -868,8 +830,8 @@ import {
     window.studioSetPan = function (trackKey, value) {
         _pushUndo();
         const p = Math.max(-1, Math.min(1, parseFloat(value)));
-        if (!_mixState[trackKey]) _mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
-        _mixState[trackKey].pan = p;
+        if (!S.mixState[trackKey]) S.mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+        S.mixState[trackKey].pan = p;
         _applyMixToLiveAudio(trackKey);
         _debounceSaveMix();
     };
@@ -877,30 +839,30 @@ import {
     window.studioSetOffset = function (trackKey, value) {
         _pushUndo();
         const ms = parseFloat(value) || 0;
-        if (!_mixState[trackKey]) _mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
-        _mixState[trackKey].offset_ms = ms;
+        if (!S.mixState[trackKey]) S.mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+        S.mixState[trackKey].offset_ms = ms;
         _debounceSaveMix();
     };
 
     window.studioSetFade = function (trackKey, type, value) {
         _pushUndo();
         const ms = Math.max(0, parseFloat(value) || 0);
-        if (!_mixState[trackKey]) _mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
-        if (type === 'in') _mixState[trackKey].fade_in_ms = ms;
-        else _mixState[trackKey].fade_out_ms = ms;
+        if (!S.mixState[trackKey]) S.mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+        if (type === 'in') S.mixState[trackKey].fade_in_ms = ms;
+        else S.mixState[trackKey].fade_out_ms = ms;
         _debounceSaveMix();
         // Redraw waveform to show fade overlay
-        const curTime = _isPlaying ? (_getAudioCtx().currentTime - _startTime) : _pauseOffset;
+        const curTime = S.isPlaying ? (_getAudioCtx().currentTime - S.startTime) : S.pauseOffset;
         _drawAllCursors(curTime);
     };
 
     window.studioSetEq = function (trackKey, band, value) {
         _pushUndo();
         const db = Math.max(-12, Math.min(12, parseFloat(value) || 0));
-        if (!_mixState[trackKey]) _mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
-        _mixState[trackKey]['eq_' + band] = db;
+        if (!S.mixState[trackKey]) S.mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+        S.mixState[trackKey]['eq_' + band] = db;
         // Apply live to playing audio
-        const ts = _trackSources[trackKey];
+        const ts = S.trackSources[trackKey];
         if (ts) {
             if (band === 'low' && ts.eqLow) ts.eqLow.gain.value = db;
             if (band === 'mid' && ts.eqMid) ts.eqMid.gain.value = db;
@@ -908,18 +870,18 @@ import {
         }
         // Update label
         const label = document.getElementById(`studio-eq-label-${trackKey}`);
-        if (label) label.textContent = _eqLabel(_mixState[trackKey]);
+        if (label) label.textContent = _eqLabel(S.mixState[trackKey]);
         _debounceSaveMix();
     };
 
     window.studioSetReverbSend = function (trackKey, value) {
         _pushUndo();
         const v = Math.max(0, Math.min(1, parseFloat(value) || 0));
-        const st = _mixState[trackKey];
+        const st = S.mixState[trackKey];
         if (!st) return;
         st.reverb_send = v;
         // Apply live
-        const ts = _trackSources[trackKey];
+        const ts = S.trackSources[trackKey];
         if (ts && ts.reverbSend) {
             ts.reverbSend.gain.value = v;
         }
@@ -931,11 +893,11 @@ import {
     window.studioSetComp = function (trackKey, param, value) {
         _pushUndo();
         const v = parseFloat(value);
-        const st = _mixState[trackKey];
+        const st = S.mixState[trackKey];
         if (!st) return;
         st['comp_' + param] = v;
         // Apply live
-        const ts = _trackSources[trackKey];
+        const ts = S.trackSources[trackKey];
         if (ts && ts.comp) {
             if (param === 'threshold') ts.comp.threshold.value = v;
             if (param === 'ratio') ts.comp.ratio.value = Math.max(1, v);
@@ -949,11 +911,11 @@ import {
 
     window.studioToggleMute = function (trackKey) {
         _captureUndoNow();
-        if (!_mixState[trackKey]) _mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
-        _mixState[trackKey].muted = !_mixState[trackKey].muted;
+        if (!S.mixState[trackKey]) S.mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+        S.mixState[trackKey].muted = !S.mixState[trackKey].muted;
         const btn = document.querySelector(`[data-mute="${trackKey}"]`);
         if (btn) {
-            if (_mixState[trackKey].muted) {
+            if (S.mixState[trackKey].muted) {
                 btn.className = 'w-7 h-7 rounded text-xs font-bold transition-colors bg-red-600 text-white';
             } else {
                 btn.className = 'w-7 h-7 rounded text-xs font-bold transition-colors bg-dark-600 hover:bg-dark-500 text-gray-400';
@@ -965,11 +927,11 @@ import {
 
     window.studioToggleSolo = function (trackKey) {
         _captureUndoNow();
-        if (!_mixState[trackKey]) _mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
-        _mixState[trackKey].solo = !_mixState[trackKey].solo;
+        if (!S.mixState[trackKey]) S.mixState[trackKey] = { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+        S.mixState[trackKey].solo = !S.mixState[trackKey].solo;
         const btn = document.querySelector(`[data-solo="${trackKey}"]`);
         if (btn) {
-            if (_mixState[trackKey].solo) {
+            if (S.mixState[trackKey].solo) {
                 btn.className = 'w-7 h-7 rounded text-xs font-bold transition-colors bg-yellow-600 text-white';
             } else {
                 btn.className = 'w-7 h-7 rounded text-xs font-bold transition-colors bg-dark-600 hover:bg-dark-500 text-gray-400';
@@ -980,8 +942,8 @@ import {
     };
 
     function _hasSoloActive() {
-        for (const key of Object.keys(_mixState)) {
-            if (_mixState[key].solo) return true;
+        for (const key of Object.keys(S.mixState)) {
+            if (S.mixState[key].solo) return true;
         }
         return false;
     }
@@ -989,46 +951,45 @@ import {
     function _applyMixToLiveAudio(trackKey) {
         const hasSolo = _hasSoloActive();
         if (trackKey === 'original') {
-            if (_songGain && _songPan) {
-                const st = _mixState.original;
-                _songGain.gain.value = st.muted ? 0 : (hasSolo && !st.solo ? 0 : st.volume);
-                _songPan.pan.value = st.pan;
+            if (S.songGain && S.songPan) {
+                const st = S.mixState.original;
+                S.songGain.gain.value = st.muted ? 0 : (hasSolo && !st.solo ? 0 : st.volume);
+                S.songPan.pan.value = st.pan;
             }
-        } else if (_trackSources[trackKey]) {
-            const st = _mixState[trackKey] || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
-            _trackSources[trackKey].gain.gain.value = st.muted ? 0 : (hasSolo && !st.solo ? 0 : st.volume);
-            _trackSources[trackKey].pan.pan.value = st.pan;
+        } else if (S.trackSources[trackKey]) {
+            const st = S.mixState[trackKey] || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+            S.trackSources[trackKey].gain.gain.value = st.muted ? 0 : (hasSolo && !st.solo ? 0 : st.volume);
+            S.trackSources[trackKey].pan.pan.value = st.pan;
         }
     }
 
     function _applyAllMixToLive() {
         const hasSolo = _hasSoloActive();
         // Original
-        if (_songGain && _songPan) {
-            const st = _mixState.original || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
-            _songGain.gain.value = st.muted ? 0 : (hasSolo && !st.solo ? 0 : st.volume);
-            _songPan.pan.value = st.pan;
+        if (S.songGain && S.songPan) {
+            const st = S.mixState.original || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+            S.songGain.gain.value = st.muted ? 0 : (hasSolo && !st.solo ? 0 : st.volume);
+            S.songPan.pan.value = st.pan;
         }
         // Tracks
-        for (const key of Object.keys(_trackSources)) {
-            const st = _mixState[key] || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
-            _trackSources[key].gain.gain.value = st.muted ? 0 : (hasSolo && !st.solo ? 0 : st.volume);
-            _trackSources[key].pan.pan.value = st.pan;
+        for (const key of Object.keys(S.trackSources)) {
+            const st = S.mixState[key] || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+            S.trackSources[key].gain.gain.value = st.muted ? 0 : (hasSolo && !st.solo ? 0 : st.volume);
+            S.trackSources[key].pan.pan.value = st.pan;
         }
     }
 
-    let _saveMixTimer = null;
     function _debounceSaveMix() {
-        if (_saveMixTimer) clearTimeout(_saveMixTimer);
-        _saveMixTimer = setTimeout(_saveMixSettings, 1000);
+        if (S.saveMixTimer) clearTimeout(S.saveMixTimer);
+        S.saveMixTimer = setTimeout(_saveMixSettings, 1000);
     }
 
     async function _saveMixSettings() {
-        if (!_currentSession) return;
+        if (!S.currentSession) return;
         const settings = [];
-        for (const key of Object.keys(_mixState)) {
+        for (const key of Object.keys(S.mixState)) {
             if (key === 'original') continue;
-            const s = _mixState[key];
+            const s = S.mixState[key];
             settings.push({
                 track_id: parseInt(key),
                 volume: s.volume,
@@ -1049,7 +1010,7 @@ import {
             });
         }
         try {
-            await fetch(`/api/plugins/studio/sessions/${_currentSession.id}/mix-settings`, {
+            await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}/mix-settings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ settings }),
@@ -1062,7 +1023,7 @@ import {
     // ── Recording ──────────────────────────────────────────────────────
 
     window.studioToggleRecord = function () {
-        if (_isRecording) {
+        if (S.isRecording) {
             _stopRecording();
         } else {
             _startRecording();
@@ -1076,38 +1037,38 @@ import {
         // Get audio input
         const deviceSelect = document.getElementById('studio-input-device');
         const deviceId = deviceSelect ? deviceSelect.value : '';
-        if (deviceId) _selectedDeviceId = deviceId;
+        if (deviceId) S.selectedDeviceId = deviceId;
         _saveSettings();
 
         const constraints = { audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } };
         if (deviceId) constraints.audio.deviceId = { exact: deviceId };
 
         try {
-            _mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+            S.mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
         } catch (e) {
             console.error('[Studio] Mic access denied:', e);
             alert('Microphone access denied. Please allow mic access and try again.');
             return;
         }
 
-        _recordedChunks = [];
+        S.recordedChunks = [];
 
         // Use MediaRecorder with WAV-compatible format
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
             ? 'audio/webm;codecs=opus' : 'audio/webm';
-        _mediaRecorder = new MediaRecorder(_mediaStream, { mimeType });
+        S.mediaRecorder = new MediaRecorder(S.mediaStream, { mimeType });
 
-        _mediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 0) _recordedChunks.push(e.data);
+        S.mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) S.recordedChunks.push(e.data);
         };
 
-        _mediaRecorder.onstop = () => {
+        S.mediaRecorder.onstop = () => {
             _uploadRecording();
         };
 
-        _mediaRecorder.start(); // single blob on stop — avoids corrupt webm chunks
-        _isRecording = true;
-        _recStartTime = Date.now();
+        S.mediaRecorder.start(); // single blob on stop — avoids corrupt webm chunks
+        S.isRecording = true;
+        S.recStartTime = Date.now();
 
         // Update UI
         document.getElementById('studio-recording-bar').classList.remove('hidden');
@@ -1116,27 +1077,27 @@ import {
         recBtn.classList.add('bg-red-600/40');
 
         // Start recording timer
-        _recInterval = setInterval(() => {
-            const elapsed = (Date.now() - _recStartTime) / 1000;
+        S.recInterval = setInterval(() => {
+            const elapsed = (Date.now() - S.recStartTime) / 1000;
             document.getElementById('studio-rec-time').textContent = _formatTime(elapsed);
         }, 200);
 
         // Start playback simultaneously so the musician hears the song
-        if (!_isPlaying) _play();
+        if (!S.isPlaying) _play();
     }
 
     function _stopRecording() {
-        _isRecording = false;
-        if (_mediaRecorder && _mediaRecorder.state !== 'inactive') {
-            _mediaRecorder.stop();
+        S.isRecording = false;
+        if (S.mediaRecorder && S.mediaRecorder.state !== 'inactive') {
+            S.mediaRecorder.stop();
         }
-        if (_mediaStream) {
-            _mediaStream.getTracks().forEach(t => t.stop());
-            _mediaStream = null;
+        if (S.mediaStream) {
+            S.mediaStream.getTracks().forEach(t => t.stop());
+            S.mediaStream = null;
         }
-        if (_recInterval) {
-            clearInterval(_recInterval);
-            _recInterval = null;
+        if (S.recInterval) {
+            clearInterval(S.recInterval);
+            S.recInterval = null;
         }
 
         // Update UI
@@ -1147,16 +1108,16 @@ import {
     }
 
     async function _uploadRecording() {
-        if (!_recordedChunks.length || !_currentSession) return;
+        if (!S.recordedChunks.length || !S.currentSession) return;
 
-        const blob = new Blob(_recordedChunks, { type: 'audio/webm' });
-        _recordedChunks = [];
+        const blob = new Blob(S.recordedChunks, { type: 'audio/webm' });
+        S.recordedChunks = [];
 
         const instrument = document.getElementById('studio-record-trackname').value;
         const formData = new FormData();
         formData.append('file', blob, `recording_${Date.now()}.webm`);
         formData.append('instrument', instrument);
-        formData.append('recorded_by', _userName);
+        formData.append('recorded_by', S.userName);
 
         // Show upload progress
         const uploadBar = document.getElementById('studio-upload-bar');
@@ -1181,7 +1142,7 @@ import {
                     }
                 };
                 xhr.onerror = () => reject(new Error('Upload failed'));
-                xhr.open('POST', `/api/plugins/studio/sessions/${_currentSession.id}/upload`);
+                xhr.open('POST', `/api/plugins/studio/sessions/${S.currentSession.id}/upload`);
                 xhr.send(formData);
             });
 
@@ -1197,21 +1158,13 @@ import {
 
     // ── Punch-in Recording ───────────────────────────────────────────
 
-    let _punchIn = 0;
-    let _punchOut = 0;
-    let _punchTrackId = null;
-    let _punchRecording = false;
-    let _punchMediaStream = null;
-    let _punchMediaRecorder = null;
-    let _punchChunks = [];
-    let _punchAutoStopTimer = null;
     const PUNCH_PREROLL = 3; // seconds before punch-in to start playback
 
     function _populatePunchTrackSelect() {
         const sel = document.getElementById('studio-punch-track');
-        if (!sel || !_currentSession) return;
+        if (!sel || !S.currentSession) return;
         sel.innerHTML = '';
-        const tracks = _currentSession.tracks || [];
+        const tracks = S.currentSession.tracks || [];
         for (const t of tracks) {
             if (!t.audio_path || t.duration <= 0) continue;
             const name = t.track_name || t.instrument || `Track ${t.id}`;
@@ -1225,74 +1178,74 @@ import {
     window.studioPunchSetIn = function () {
         const seekBar = document.getElementById('studio-seek-bar');
         const t = parseFloat(seekBar?.value || 0);
-        _punchIn = t;
+        S.punchIn = t;
         document.getElementById('studio-punch-in').value = _formatTime(t);
     };
 
     window.studioPunchSetOut = function () {
         const seekBar = document.getElementById('studio-seek-bar');
         const t = parseFloat(seekBar?.value || 0);
-        _punchOut = t;
+        S.punchOut = t;
         document.getElementById('studio-punch-out').value = _formatTime(t);
     };
 
     window.studioPunchRecord = async function () {
-        if (_punchRecording) {
+        if (S.punchRecording) {
             _stopPunchRecord();
             return;
         }
 
-        _punchIn = _parseTimeInput(document.getElementById('studio-punch-in').value);
-        _punchOut = _parseTimeInput(document.getElementById('studio-punch-out').value);
+        S.punchIn = _parseTimeInput(document.getElementById('studio-punch-in').value);
+        S.punchOut = _parseTimeInput(document.getElementById('studio-punch-out').value);
         const sel = document.getElementById('studio-punch-track');
-        _punchTrackId = sel ? parseInt(sel.value) : null;
+        S.punchTrackId = sel ? parseInt(sel.value) : null;
 
-        if (!_punchTrackId) { alert('Select a track to punch into.'); return; }
-        if (_punchIn >= _punchOut) { alert('Punch In must be before Punch Out.'); return; }
-        if (_punchOut - _punchIn < 0.5) { alert('Punch region too short (min 0.5s).'); return; }
+        if (!S.punchTrackId) { alert('Select a track to punch into.'); return; }
+        if (S.punchIn >= S.punchOut) { alert('Punch In must be before Punch Out.'); return; }
+        if (S.punchOut - S.punchIn < 0.5) { alert('Punch region too short (min 0.5s).'); return; }
 
         // Get mic
         const deviceSelect = document.getElementById('studio-input-device');
-        const deviceId = deviceSelect ? deviceSelect.value : _selectedDeviceId;
+        const deviceId = deviceSelect ? deviceSelect.value : S.selectedDeviceId;
         const constraints = { audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } };
         if (deviceId) constraints.audio.deviceId = { exact: deviceId };
 
         try {
-            _punchMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+            S.punchMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
         } catch (e) {
             alert('Microphone access denied.');
             return;
         }
 
-        _punchChunks = [];
+        S.punchChunks = [];
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
             ? 'audio/webm;codecs=opus' : 'audio/webm';
-        _punchMediaRecorder = new MediaRecorder(_punchMediaStream, { mimeType });
-        _punchMediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 0) _punchChunks.push(e.data);
+        S.punchMediaRecorder = new MediaRecorder(S.punchMediaStream, { mimeType });
+        S.punchMediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) S.punchChunks.push(e.data);
         };
-        _punchMediaRecorder.onstop = () => { _uploadPunchRecording(); };
+        S.punchMediaRecorder.onstop = () => { _uploadPunchRecording(); };
 
         // Start playback from pre-roll point
-        const prerollStart = Math.max(0, _punchIn - PUNCH_PREROLL);
+        const prerollStart = Math.max(0, S.punchIn - PUNCH_PREROLL);
         studioSeek(prerollStart);
         _play();
 
         // Start recorder at the punch-in time
-        const delayToRecord = (_punchIn - prerollStart) * 1000;
+        const delayToRecord = (S.punchIn - prerollStart) * 1000;
         setTimeout(() => {
-            if (!_punchRecording) return; // cancelled
-            _punchMediaRecorder.start();
-            console.log(`[Studio] Punch recording started at ${_punchIn}s`);
+            if (!S.punchRecording) return; // cancelled
+            S.punchMediaRecorder.start();
+            console.log(`[Studio] Punch recording started at ${S.punchIn}s`);
         }, delayToRecord);
 
         // Auto-stop at punch-out
-        const delayToStop = (_punchOut - prerollStart) * 1000;
-        _punchAutoStopTimer = setTimeout(() => {
+        const delayToStop = (S.punchOut - prerollStart) * 1000;
+        S.punchAutoStopTimer = setTimeout(() => {
             _stopPunchRecord();
         }, delayToStop);
 
-        _punchRecording = true;
+        S.punchRecording = true;
 
         // Update button
         const btn = document.getElementById('studio-btn-punch');
@@ -1303,19 +1256,19 @@ import {
         const recBar = document.getElementById('studio-recording-bar');
         recBar.classList.remove('hidden');
         recBar.querySelector('span:nth-child(2)').textContent =
-            `Punch: ${_formatTime(_punchIn)} → ${_formatTime(_punchOut)}`;
+            `Punch: ${_formatTime(S.punchIn)} → ${_formatTime(S.punchOut)}`;
     };
 
     function _stopPunchRecord() {
-        _punchRecording = false;
-        if (_punchAutoStopTimer) { clearTimeout(_punchAutoStopTimer); _punchAutoStopTimer = null; }
+        S.punchRecording = false;
+        if (S.punchAutoStopTimer) { clearTimeout(S.punchAutoStopTimer); S.punchAutoStopTimer = null; }
 
-        if (_punchMediaRecorder && _punchMediaRecorder.state !== 'inactive') {
-            _punchMediaRecorder.stop();
+        if (S.punchMediaRecorder && S.punchMediaRecorder.state !== 'inactive') {
+            S.punchMediaRecorder.stop();
         }
-        if (_punchMediaStream) {
-            _punchMediaStream.getTracks().forEach(t => t.stop());
-            _punchMediaStream = null;
+        if (S.punchMediaStream) {
+            S.punchMediaStream.getTracks().forEach(t => t.stop());
+            S.punchMediaStream = null;
         }
 
         _pause();
@@ -1327,15 +1280,15 @@ import {
     }
 
     async function _uploadPunchRecording() {
-        if (!_punchChunks.length || !_punchTrackId) return;
+        if (!S.punchChunks.length || !S.punchTrackId) return;
 
-        const blob = new Blob(_punchChunks, { type: 'audio/webm' });
-        _punchChunks = [];
+        const blob = new Blob(S.punchChunks, { type: 'audio/webm' });
+        S.punchChunks = [];
 
         const formData = new FormData();
         formData.append('file', blob, `punch_${Date.now()}.webm`);
-        formData.append('punch_in', _punchIn.toFixed(3));
-        formData.append('punch_out', _punchOut.toFixed(3));
+        formData.append('punch_in', S.punchIn.toFixed(3));
+        formData.append('punch_out', S.punchOut.toFixed(3));
 
         const uploadBar = document.getElementById('studio-upload-bar');
         uploadBar.classList.remove('hidden');
@@ -1356,7 +1309,7 @@ import {
                     else reject(new Error(xhr.responseText));
                 };
                 xhr.onerror = () => reject(new Error('Upload failed'));
-                xhr.open('POST', `/api/plugins/studio/tracks/${_punchTrackId}/splice`);
+                xhr.open('POST', `/api/plugins/studio/tracks/${S.punchTrackId}/splice`);
                 xhr.send(formData);
             });
 
@@ -1372,8 +1325,8 @@ import {
     // ── Practice (open song on highway) ──────────────────────────────
 
     window.studioPractice = function () {
-        if (!_currentSession) return;
-        const filename = encodeURIComponent(_currentSession.song_filename);
+        if (!S.currentSession) return;
+        const filename = encodeURIComponent(S.currentSession.song_filename);
         if (typeof playSong === 'function') {
             playSong(filename);
         } else {
@@ -1385,31 +1338,14 @@ import {
     // Records mic input while the user plays along on the highway/player.
     // Overlay waits for audio to load, then user starts recording in sync.
 
-    let _hwRecording = false;
-    let _hwMediaStream = null;
-    let _hwMediaRecorder = null;
-    let _hwRecordedChunks = [];
-    let _hwRecStartTime = 0;
-    let _hwRecInterval = null;
-    let _hwOverlay = null;
-    let _hwDrawHookAdded = false;
-    let _hwAudioCtx = null;
-    let _hwGainNode = null;
-    let _hwAnalyser = null;
-    let _hwSourceNode = null;
-    let _hwRecDest = null;
-    let _hwMeterInterval = null;
-    let _hwInputGain = 1.0;
-    let _hwInstrument = '';
-    let _hwExpectedDuration = 0;  // audio.currentTime at stop — ground truth for drift correction
 
     window.studioHighwayRecord = async function () {
-        if (!_currentSession) return;
+        if (!S.currentSession) return;
 
-        _hwInstrument = document.getElementById('studio-record-trackname').value;
+        S.hwInstrument = document.getElementById('studio-record-trackname').value;
         const deviceSelect = document.getElementById('studio-input-device');
-        const deviceId = deviceSelect ? deviceSelect.value : _selectedDeviceId;
-        if (deviceId) { _selectedDeviceId = deviceId; _saveSettings(); }
+        const deviceId = deviceSelect ? deviceSelect.value : S.selectedDeviceId;
+        if (deviceId) { S.selectedDeviceId = deviceId; _saveSettings(); }
 
         // Request mic access before navigating away
         const constraints = {
@@ -1418,7 +1354,7 @@ import {
         if (deviceId) constraints.audio.deviceId = { exact: deviceId };
 
         try {
-            _hwMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+            S.hwMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
         } catch (e) {
             console.error('[Studio] Mic access denied:', e);
             alert('Microphone access denied. Please allow mic access and try again.');
@@ -1427,21 +1363,21 @@ import {
 
         // Set up audio graph: mic → gain → destination (for recording)
         //                       mic → gain → analyser (for metering)
-        _hwAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (_hwAudioCtx.state === 'suspended') await _hwAudioCtx.resume();
-        _hwSourceNode = _hwAudioCtx.createMediaStreamSource(_hwMediaStream);
-        _hwGainNode = _hwAudioCtx.createGain();
-        _hwGainNode.gain.value = _hwInputGain;
-        _hwAnalyser = _hwAudioCtx.createAnalyser();
-        _hwAnalyser.fftSize = 256;
-        _hwRecDest = _hwAudioCtx.createMediaStreamDestination();
+        S.hwAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (S.hwAudioCtx.state === 'suspended') await S.hwAudioCtx.resume();
+        S.hwSourceNode = S.hwAudioCtx.createMediaStreamSource(S.hwMediaStream);
+        S.hwGainNode = S.hwAudioCtx.createGain();
+        S.hwGainNode.gain.value = S.hwInputGain;
+        S.hwAnalyser = S.hwAudioCtx.createAnalyser();
+        S.hwAnalyser.fftSize = 256;
+        S.hwRecDest = S.hwAudioCtx.createMediaStreamDestination();
 
-        _hwSourceNode.connect(_hwGainNode);
-        _hwGainNode.connect(_hwRecDest);
-        _hwGainNode.connect(_hwAnalyser);
+        S.hwSourceNode.connect(S.hwGainNode);
+        S.hwGainNode.connect(S.hwRecDest);
+        S.hwGainNode.connect(S.hwAnalyser);
 
         // Open song on the highway
-        const filename = encodeURIComponent(_currentSession.song_filename);
+        const filename = encodeURIComponent(S.currentSession.song_filename);
         if (typeof playSong !== 'function') {
             alert('Player not available.');
             _cleanupHwAudio();
@@ -1456,20 +1392,19 @@ import {
         _waitForAudioReady();
     };
 
-    let _hwWaitCancelled = false;
 
     function _waitForAudioReady() {
         const audio = document.getElementById('audio');
         if (!audio) { setTimeout(_waitForAudioReady, 500); return; }
 
-        _hwWaitCancelled = false;
+        S.hwWaitCancelled = false;
         const initialSrc = audio.src;
 
         function checkReady() {
-            if (_hwWaitCancelled) return;  // recording started or cancelled
+            if (S.hwWaitCancelled) return;  // recording started or cancelled
             if (audio.src && audio.src !== initialSrc) {
                 if (audio.readyState >= 3) {
-                    if (!_hwWaitCancelled) _updateHwOverlay('ready');
+                    if (!S.hwWaitCancelled) _updateHwOverlay('ready');
                 } else {
                     audio.addEventListener('canplay', onCanPlay);
                 }
@@ -1480,7 +1415,7 @@ import {
 
         function onCanPlay() {
             audio.removeEventListener('canplay', onCanPlay);
-            if (!_hwWaitCancelled) _updateHwOverlay('ready');
+            if (!S.hwWaitCancelled) _updateHwOverlay('ready');
         }
 
         setTimeout(checkReady, 500);
@@ -1488,26 +1423,26 @@ import {
         // Timeout fallback
         setTimeout(() => {
             audio.removeEventListener('canplay', onCanPlay);
-            if (!_hwWaitCancelled && audio.src) {
+            if (!S.hwWaitCancelled && audio.src) {
                 _updateHwOverlay('ready');
             }
         }, 30000);
     }
 
     function _createHwOverlay(state) {
-        if (_hwOverlay) _hwOverlay.remove();
-        _hwOverlay = document.createElement('div');
-        _hwOverlay.id = 'studio-hw-overlay';
-        _hwOverlay.className = 'fixed top-4 left-1/2 -translate-x-1/2 z-[300] flex flex-col gap-2 bg-black/90 backdrop-blur-sm border border-red-600/50 rounded-xl px-5 py-3 shadow-2xl min-w-[340px]';
-        document.body.appendChild(_hwOverlay);
+        if (S.hwOverlay) S.hwOverlay.remove();
+        S.hwOverlay = document.createElement('div');
+        S.hwOverlay.id = 'studio-hw-overlay';
+        S.hwOverlay.className = 'fixed top-4 left-1/2 -translate-x-1/2 z-[300] flex flex-col gap-2 bg-black/90 backdrop-blur-sm border border-red-600/50 rounded-xl px-5 py-3 shadow-2xl min-w-[340px]';
+        document.body.appendChild(S.hwOverlay);
         _updateHwOverlay(state);
     }
 
     function _updateHwOverlay(state) {
-        if (!_hwOverlay) return;
+        if (!S.hwOverlay) return;
 
         if (state === 'waiting') {
-            _hwOverlay.innerHTML = `
+            S.hwOverlay.innerHTML = `
                 <div class="flex items-center gap-3">
                     <span class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></span>
                     <span class="text-yellow-300 text-sm font-medium">Waiting for song to load...</span>
@@ -1519,11 +1454,11 @@ import {
         }
 
         else if (state === 'ready') {
-            _hwOverlay.innerHTML = `
+            S.hwOverlay.innerHTML = `
                 <div class="flex items-center gap-3">
                     <span class="w-3 h-3 rounded-full bg-green-500"></span>
                     <span class="text-green-300 text-sm font-medium">Ready</span>
-                    <span class="text-gray-500 text-xs">${_esc(_hwInstrument)}</span>
+                    <span class="text-gray-500 text-xs">${_esc(S.hwInstrument)}</span>
                     <button id="studio-hw-go-btn" class="ml-auto px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors">
                         Start Recording
                     </button>
@@ -1533,9 +1468,9 @@ import {
                 </div>
                 <div class="flex items-center gap-2">
                     <label class="text-gray-500 text-xs w-12">Input</label>
-                    <input id="studio-hw-gain" type="range" min="0" max="300" value="${Math.round(_hwInputGain * 100)}"
+                    <input id="studio-hw-gain" type="range" min="0" max="300" value="${Math.round(S.hwInputGain * 100)}"
                         class="flex-1 h-1 accent-accent" title="Input gain">
-                    <span id="studio-hw-gain-val" class="text-gray-400 text-xs w-10 text-right">${Math.round(_hwInputGain * 100)}%</span>
+                    <span id="studio-hw-gain-val" class="text-gray-400 text-xs w-10 text-right">${Math.round(S.hwInputGain * 100)}%</span>
                     <div id="studio-hw-meter" class="w-24 h-3 bg-dark-800 rounded-full overflow-hidden">
                         <div id="studio-hw-meter-bar" class="h-full bg-green-500 rounded-full transition-all" style="width:0%"></div>
                     </div>
@@ -1543,9 +1478,9 @@ import {
             document.getElementById('studio-hw-go-btn').onclick = _beginHwRecording;
             document.getElementById('studio-hw-cancel-btn').onclick = () => _stopHighwayRecording(true);
             document.getElementById('studio-hw-gain').oninput = (e) => {
-                _hwInputGain = e.target.value / 100;
-                if (_hwGainNode) _hwGainNode.gain.value = _hwInputGain;
-                document.getElementById('studio-hw-gain-val').textContent = Math.round(_hwInputGain * 100) + '%';
+                S.hwInputGain = e.target.value / 100;
+                if (S.hwGainNode) S.hwGainNode.gain.value = S.hwInputGain;
+                document.getElementById('studio-hw-gain-val').textContent = Math.round(S.hwInputGain * 100) + '%';
             };
 
             // Start level metering
@@ -1553,13 +1488,13 @@ import {
         }
 
         else if (state === 'recording') {
-            _hwOverlay.innerHTML = `
+            S.hwOverlay.innerHTML = `
                 <div class="flex items-center gap-3">
                     <span class="w-3 h-3 rounded-full bg-red-500 animate-pulse"></span>
                     <span class="text-red-300 text-sm font-medium">Recording</span>
                     <span id="studio-hw-rec-time" class="text-red-400 text-sm font-mono">0:00</span>
                     <span class="text-gray-600 mx-1">|</span>
-                    <span class="text-gray-400 text-xs">${_esc(_hwInstrument)}</span>
+                    <span class="text-gray-400 text-xs">${_esc(S.hwInstrument)}</span>
                     <span id="studio-hw-play-hint" class="text-yellow-400 text-xs animate-pulse">Press Play &#9654; on the highway</span>
                     <button id="studio-hw-stop-btn" class="ml-auto px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors">
                         Stop &amp; Save
@@ -1570,9 +1505,9 @@ import {
                 </div>
                 <div class="flex items-center gap-2">
                     <label class="text-gray-500 text-xs w-12">Input</label>
-                    <input id="studio-hw-gain" type="range" min="0" max="300" value="${Math.round(_hwInputGain * 100)}"
+                    <input id="studio-hw-gain" type="range" min="0" max="300" value="${Math.round(S.hwInputGain * 100)}"
                         class="flex-1 h-1 accent-accent" title="Input gain">
-                    <span id="studio-hw-gain-val" class="text-gray-400 text-xs w-10 text-right">${Math.round(_hwInputGain * 100)}%</span>
+                    <span id="studio-hw-gain-val" class="text-gray-400 text-xs w-10 text-right">${Math.round(S.hwInputGain * 100)}%</span>
                     <div id="studio-hw-meter" class="w-24 h-3 bg-dark-800 rounded-full overflow-hidden">
                         <div id="studio-hw-meter-bar" class="h-full bg-green-500 rounded-full transition-all" style="width:0%"></div>
                     </div>
@@ -1580,19 +1515,19 @@ import {
             document.getElementById('studio-hw-stop-btn').onclick = () => _stopHighwayRecording(false);
             document.getElementById('studio-hw-cancel-btn').onclick = () => _stopHighwayRecording(true);
             document.getElementById('studio-hw-gain').oninput = (e) => {
-                _hwInputGain = e.target.value / 100;
-                if (_hwGainNode) _hwGainNode.gain.value = _hwInputGain;
-                document.getElementById('studio-hw-gain-val').textContent = Math.round(_hwInputGain * 100) + '%';
+                S.hwInputGain = e.target.value / 100;
+                if (S.hwGainNode) S.hwGainNode.gain.value = S.hwInputGain;
+                document.getElementById('studio-hw-gain-val').textContent = Math.round(S.hwInputGain * 100) + '%';
             };
         }
     }
 
     function _startHwMeter() {
-        if (_hwMeterInterval) clearInterval(_hwMeterInterval);
-        _hwMeterInterval = setInterval(() => {
-            if (!_hwAnalyser) return;
-            const data = new Uint8Array(_hwAnalyser.frequencyBinCount);
-            _hwAnalyser.getByteTimeDomainData(data);
+        if (S.hwMeterInterval) clearInterval(S.hwMeterInterval);
+        S.hwMeterInterval = setInterval(() => {
+            if (!S.hwAnalyser) return;
+            const data = new Uint8Array(S.hwAnalyser.frequencyBinCount);
+            S.hwAnalyser.getByteTimeDomainData(data);
             let peak = 0;
             for (let i = 0; i < data.length; i++) {
                 const v = Math.abs(data[i] - 128) / 128;
@@ -1608,29 +1543,27 @@ import {
         }, 50);
     }
 
-    let _hwPlayOffset = 0;   // seconds of recording before audio started playing
-    let _hwPlayListener = null;
 
     async function _beginHwRecording() {
         const audio = document.getElementById('audio');
         if (!audio) return;
 
         // Stop all pending wait/poll logic so it can't overwrite the overlay
-        _hwWaitCancelled = true;
+        S.hwWaitCancelled = true;
 
-        if (_hwAudioCtx && _hwAudioCtx.state === 'suspended') await _hwAudioCtx.resume();
+        if (S.hwAudioCtx && S.hwAudioCtx.state === 'suspended') await S.hwAudioCtx.resume();
 
-        _hwRecordedChunks = [];
-        _hwPlayOffset = 0;
+        S.hwRecordedChunks = [];
+        S.hwPlayOffset = 0;
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
             ? 'audio/webm;codecs=opus' : 'audio/webm';
-        _hwMediaRecorder = new MediaRecorder(_hwMediaStream, { mimeType });
+        S.hwMediaRecorder = new MediaRecorder(S.hwMediaStream, { mimeType });
 
-        _hwMediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 0) _hwRecordedChunks.push(e.data);
+        S.hwMediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) S.hwRecordedChunks.push(e.data);
         };
-        _hwMediaRecorder.onstop = () => {
-            _hwUploadRecording(_hwInstrument);
+        S.hwMediaRecorder.onstop = () => {
+            _hwUploadRecording(S.hwInstrument);
         };
 
         // Start recording immediately. Don't call audio.play() — the highway
@@ -1638,42 +1571,42 @@ import {
         // Play on the highway controls themselves. We listen for the 'play'
         // event to know when audio actually started, and trim the leading
         // dead time server-side.
-        _hwMediaRecorder.start();
-        _hwRecording = true;
-        _hwRecStartTime = Date.now();
+        S.hwMediaRecorder.start();
+        S.hwRecording = true;
+        S.hwRecStartTime = Date.now();
 
         // Listen for when the user actually starts playback
-        _hwPlayListener = () => {
-            _hwPlayOffset = (Date.now() - _hwRecStartTime) / 1000;
-            audio.removeEventListener('play', _hwPlayListener);
-            _hwPlayListener = null;
+        S.hwPlayListener = () => {
+            S.hwPlayOffset = (Date.now() - S.hwRecStartTime) / 1000;
+            audio.removeEventListener('play', S.hwPlayListener);
+            S.hwPlayListener = null;
             // Hide the "press play" hint
             const hint = document.getElementById('studio-hw-play-hint');
             if (hint) hint.remove();
-            console.log(`[Studio] Audio play detected, offset: ${_hwPlayOffset.toFixed(2)}s`);
+            console.log(`[Studio] Audio play detected, offset: ${S.hwPlayOffset.toFixed(2)}s`);
         };
-        audio.addEventListener('play', _hwPlayListener);
+        audio.addEventListener('play', S.hwPlayListener);
 
         // Switch overlay to recording state
         _updateHwOverlay('recording');
 
-        _hwRecInterval = setInterval(() => {
+        S.hwRecInterval = setInterval(() => {
             const el = document.getElementById('studio-hw-rec-time');
             if (el) {
-                const elapsed = (Date.now() - _hwRecStartTime) / 1000;
+                const elapsed = (Date.now() - S.hwRecStartTime) / 1000;
                 el.textContent = _formatTime(elapsed);
             }
         }, 200);
 
-        if (typeof highway !== 'undefined' && highway.addDrawHook && !_hwDrawHookAdded) {
+        if (typeof highway !== 'undefined' && highway.addDrawHook && !S.hwDrawHookAdded) {
             highway.addDrawHook(_hwDrawHook);
-            _hwDrawHookAdded = true;
+            S.hwDrawHookAdded = true;
         }
     }
 
     // Draw hook: red glow border on highway canvas while recording
     function _hwDrawHook(ctx, W, H) {
-        if (!_hwRecording) return;
+        if (!S.hwRecording) return;
         ctx.save();
         ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
         ctx.lineWidth = 4;
@@ -1688,61 +1621,61 @@ import {
     }
 
     function _cleanupHwAudio() {
-        if (_hwMeterInterval) {
-            clearInterval(_hwMeterInterval);
-            _hwMeterInterval = null;
+        if (S.hwMeterInterval) {
+            clearInterval(S.hwMeterInterval);
+            S.hwMeterInterval = null;
         }
-        if (_hwMediaStream) {
-            _hwMediaStream.getTracks().forEach(t => t.stop());
-            _hwMediaStream = null;
+        if (S.hwMediaStream) {
+            S.hwMediaStream.getTracks().forEach(t => t.stop());
+            S.hwMediaStream = null;
         }
-        _hwSourceNode = null;
-        _hwRecDest = null;
-        _hwGainNode = null;
-        _hwAnalyser = null;
-        if (_hwAudioCtx) {
-            _hwAudioCtx.close().catch(() => {});
-            _hwAudioCtx = null;
+        S.hwSourceNode = null;
+        S.hwRecDest = null;
+        S.hwGainNode = null;
+        S.hwAnalyser = null;
+        if (S.hwAudioCtx) {
+            S.hwAudioCtx.close().catch(() => {});
+            S.hwAudioCtx = null;
         }
     }
 
     function _stopHighwayRecording(cancel) {
-        _hwRecording = false;
-        _hwWaitCancelled = true;
+        S.hwRecording = false;
+        S.hwWaitCancelled = true;
 
         const audio = document.getElementById('audio');
-        _hwExpectedDuration = audio ? audio.currentTime : 0;
+        S.hwExpectedDuration = audio ? audio.currentTime : 0;
 
-        if (_hwPlayListener && audio) {
-            audio.removeEventListener('play', _hwPlayListener);
-            _hwPlayListener = null;
+        if (S.hwPlayListener && audio) {
+            audio.removeEventListener('play', S.hwPlayListener);
+            S.hwPlayListener = null;
         }
 
-        if (_hwRecInterval) {
-            clearInterval(_hwRecInterval);
-            _hwRecInterval = null;
+        if (S.hwRecInterval) {
+            clearInterval(S.hwRecInterval);
+            S.hwRecInterval = null;
         }
-        if (_hwOverlay) {
-            _hwOverlay.remove();
-            _hwOverlay = null;
+        if (S.hwOverlay) {
+            S.hwOverlay.remove();
+            S.hwOverlay = null;
         }
 
         if (cancel) {
-            if (_hwMediaRecorder && _hwMediaRecorder.state !== 'inactive') {
-                _hwMediaRecorder.ondataavailable = null;
-                _hwMediaRecorder.onstop = null;
-                _hwMediaRecorder.stop();
+            if (S.hwMediaRecorder && S.hwMediaRecorder.state !== 'inactive') {
+                S.hwMediaRecorder.ondataavailable = null;
+                S.hwMediaRecorder.onstop = null;
+                S.hwMediaRecorder.stop();
             }
-            _hwRecordedChunks = [];
+            S.hwRecordedChunks = [];
             _cleanupHwAudio();
         } else {
-            if (_hwMediaRecorder && _hwMediaRecorder.state !== 'inactive') {
-                const origOnStop = _hwMediaRecorder.onstop;
-                _hwMediaRecorder.onstop = () => {
+            if (S.hwMediaRecorder && S.hwMediaRecorder.state !== 'inactive') {
+                const origOnStop = S.hwMediaRecorder.onstop;
+                S.hwMediaRecorder.onstop = () => {
                     if (origOnStop) origOnStop();
                     _cleanupHwAudio();
                 };
-                _hwMediaRecorder.stop();
+                S.hwMediaRecorder.stop();
             } else {
                 _cleanupHwAudio();
             }
@@ -1750,23 +1683,23 @@ import {
     }
 
     async function _hwUploadRecording(instrument) {
-        if (!_hwRecordedChunks.length || !_currentSession) return;
+        if (!S.hwRecordedChunks.length || !S.currentSession) return;
 
-        const blob = new Blob(_hwRecordedChunks, { type: 'audio/webm' });
-        _hwRecordedChunks = [];
+        const blob = new Blob(S.hwRecordedChunks, { type: 'audio/webm' });
+        S.hwRecordedChunks = [];
 
         const formData = new FormData();
         formData.append('file', blob, `recording_${Date.now()}.webm`);
         formData.append('instrument', instrument);
-        formData.append('recorded_by', _userName);
-        if (_hwExpectedDuration > 0) {
-            formData.append('expected_duration', _hwExpectedDuration.toFixed(3));
+        formData.append('recorded_by', S.userName);
+        if (S.hwExpectedDuration > 0) {
+            formData.append('expected_duration', S.hwExpectedDuration.toFixed(3));
         }
-        if (_hwPlayOffset > 0.1) {
-            formData.append('trim_start', _hwPlayOffset.toFixed(3));
+        if (S.hwPlayOffset > 0.1) {
+            formData.append('trim_start', S.hwPlayOffset.toFixed(3));
         }
-        if (_hwInputGain !== 1.0) {
-            formData.append('input_gain', _hwInputGain.toFixed(3));
+        if (S.hwInputGain !== 1.0) {
+            formData.append('input_gain', S.hwInputGain.toFixed(3));
         }
 
         const toast = document.createElement('div');
@@ -1790,13 +1723,13 @@ import {
                     else reject(new Error(xhr.responseText));
                 };
                 xhr.onerror = () => reject(new Error('Upload failed'));
-                xhr.open('POST', `/api/plugins/studio/sessions/${_currentSession.id}/upload`);
+                xhr.open('POST', `/api/plugins/studio/sessions/${S.currentSession.id}/upload`);
                 xhr.send(formData);
             });
 
             toast.innerHTML = '<span class="text-green-400">Recording saved! Returning to mixer...</span>';
             // Navigate back to studio and open the session
-            const sessionId = _currentSession.id;
+            const sessionId = S.currentSession.id;
             setTimeout(() => {
                 toast.remove();
                 showScreen('plugin-studio');
@@ -1814,11 +1747,11 @@ import {
     // ── Track Management ───────────────────────────────────────────────
 
     window.studioAddTrack = async function () {
-        if (!_currentSession) return;
+        if (!S.currentSession) return;
         const name = prompt('Track name:', 'New Track');
         if (!name) return;
         try {
-            await fetch(`/api/plugins/studio/sessions/${_currentSession.id}/add-track`, {
+            await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}/add-track`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name }),
@@ -1872,11 +1805,11 @@ import {
                 body: JSON.stringify({ color }),
             });
             // Update local state
-            const t = _currentSession.tracks.find(t => t.id === trackId);
+            const t = S.currentSession.tracks.find(t => t.id === trackId);
             if (t) t.color = color;
             _renderTracks();
             // Redraw waveforms with new color
-            const curTime = _isPlaying ? (_getAudioCtx().currentTime - _startTime) : _pauseOffset;
+            const curTime = S.isPlaying ? (_getAudioCtx().currentTime - S.startTime) : S.pauseOffset;
             _drawAllCursors(curTime);
         } catch (e) {
             console.error('[Studio] Set color error:', e);
@@ -1931,13 +1864,13 @@ import {
     };
 
     window.studioImportAudioFile = async function (fileInput) {
-        if (!fileInput.files.length || !_currentSession) return;
+        if (!fileInput.files.length || !S.currentSession) return;
         const file = fileInput.files[0];
         const name = Path_stem(file.name) || 'Imported';
 
         // Create a new track, then import audio into it
         try {
-            const resp = await fetch(`/api/plugins/studio/sessions/${_currentSession.id}/add-track`, {
+            const resp = await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}/add-track`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name }),
@@ -1971,8 +1904,8 @@ import {
         if (!confirm('Delete this track?')) return;
         try {
             await fetch(`/api/plugins/studio/tracks/${trackId}`, { method: 'DELETE' });
-            delete _trackBuffers[trackId];
-            delete _mixState[trackId];
+            delete S.trackBuffers[trackId];
+            delete S.mixState[trackId];
             await _reloadSession();
         } catch (e) {
             console.error('[Studio] Delete track error:', e);
@@ -1980,12 +1913,12 @@ import {
     };
 
     async function _reloadSession() {
-        if (!_currentSession) return;
-        const wasPlaying = _isPlaying;
+        if (!S.currentSession) return;
+        const wasPlaying = S.isPlaying;
         if (wasPlaying) _pause();
         try {
-            const resp = await fetch(`/api/plugins/studio/sessions/${_currentSession.id}`);
-            _currentSession = await resp.json();
+            const resp = await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}`);
+            S.currentSession = await resp.json();
             _renderTracks();
             _populatePunchTrackSelect();
             await _loadTrackAudio();
@@ -1997,7 +1930,7 @@ import {
     // ── Export ──────────────────────────────────────────────────────────
 
     window.studioExportMix = async function () {
-        if (!_currentSession) return;
+        if (!S.currentSession) return;
         const statusDiv = document.getElementById('studio-export-status');
         const msgSpan = document.getElementById('studio-export-msg');
         const linkEl = document.getElementById('studio-export-link');
@@ -2006,10 +1939,10 @@ import {
         linkEl.classList.add('hidden');
         msgSpan.textContent = 'Mixing tracks on server...';
 
-        const origState = _mixState.original || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
+        const origState = S.mixState.original || { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 };
 
         try {
-            const resp = await fetch(`/api/plugins/studio/sessions/${_currentSession.id}/mix`, {
+            const resp = await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}/mix`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -2049,7 +1982,7 @@ import {
         // to fill the entire canvas width.
         const channelData = audioBuffer.getChannelData(0);
         const trackDuration = audioBuffer.duration;
-        const totalDuration = _duration || trackDuration;
+        const totalDuration = S.duration || trackDuration;
         const peakCount = Math.min(W, 800);
         // How many peaks this track actually fills (proportional to duration)
         const filledPeaks = Math.round(peakCount * (trackDuration / totalDuration));
@@ -2064,13 +1997,13 @@ import {
             }
             peaks[i] = peak;
         }
-        _waveformPeaks[key] = peaks;
+        S.waveformPeaks[key] = peaks;
 
         _redrawWaveform(key, canvas, 0);
     }
 
     function _redrawWaveform(key, canvas, cursorTime) {
-        const peaks = _waveformPeaks[key];
+        const peaks = S.waveformPeaks[key];
         if (!peaks || !canvas) return;
 
         const ctx = canvas.getContext('2d');
@@ -2080,21 +2013,21 @@ import {
 
         ctx.clearRect(0, 0, W, H);
 
-        if (_duration <= 0) return;
+        if (S.duration <= 0) return;
 
         // Visible time window based on zoom
-        const visibleDur = _duration / _zoomLevel;
-        const visStart = _scrollOffset;
+        const visibleDur = S.duration / S.zoomLevel;
+        const visStart = S.scrollOffset;
         const visEnd = visStart + visibleDur;
 
         // Track time offset
-        const st = _mixState[key] || {};
+        const st = S.mixState[key] || {};
         const offsetSec = (st.offset_ms || 0) / 1000;
 
         // Get track color for waveform tint
         let waveColor = '64, 128, 224'; // default blue
-        if (key !== 'original' && _currentSession) {
-            const track = _currentSession.tracks.find(t => t.id === key);
+        if (key !== 'original' && S.currentSession) {
+            const track = S.currentSession.tracks.find(t => t.id === key);
             if (track) {
                 const hex = _getTrackColor(track);
                 const r = parseInt(hex.slice(1, 3), 16);
@@ -2105,9 +2038,9 @@ import {
         }
 
         // Map peak index to time: peaks span the track's portion of total duration
-        const peakTimeStep = _duration / peaks.length;
+        const peakTimeStep = S.duration / peaks.length;
 
-        const barW = Math.max(1, (W / peaks.length) * _zoomLevel);
+        const barW = Math.max(1, (W / peaks.length) * S.zoomLevel);
         for (let i = 0; i < peaks.length; i++) {
             const peakTime = (i * peakTimeStep) + offsetSec;
             if (peakTime < visStart || peakTime > visEnd) continue;
@@ -2132,10 +2065,10 @@ import {
                 ctx.fillRect(fadeStartPx, 0, fadeEndPx - fadeStartPx, H);
             }
         }
-        if (fadeOutSec > 0 && _duration > 0) {
+        if (fadeOutSec > 0 && S.duration > 0) {
             // Fade out starts at track end minus fade duration
-            const buf = _trackBuffers[key];
-            const trackEnd = offsetSec + (buf ? buf.duration : _duration);
+            const buf = S.trackBuffers[key];
+            const trackEnd = offsetSec + (buf ? buf.duration : S.duration);
             const fadeStartPx = ((trackEnd - fadeOutSec - visStart) / visibleDur) * W;
             const fadeEndPx = ((trackEnd - visStart) / visibleDur) * W;
             if (fadeEndPx > 0 && fadeStartPx < W) {
@@ -2148,8 +2081,8 @@ import {
         }
 
         // Draw markers
-        if (_currentSession && _currentSession.markers) {
-            for (const m of _currentSession.markers) {
+        if (S.currentSession && S.currentSession.markers) {
+            for (const m of S.currentSession.markers) {
                 if (m.time >= visStart && m.time <= visEnd) {
                     const mx = ((m.time - visStart) / visibleDur) * W;
                     ctx.fillStyle = m.color || '#e0a030';
@@ -2175,21 +2108,21 @@ import {
     }
 
     function _drawAllCursors(timeSeconds) {
-        if (_duration <= 0) return;
+        if (S.duration <= 0) return;
 
         // Auto-scroll: keep cursor visible when playing
-        if (_isPlaying) {
-            const visibleDur = _duration / _zoomLevel;
-            if (timeSeconds < _scrollOffset || timeSeconds > _scrollOffset + visibleDur) {
-                _scrollOffset = Math.max(0, timeSeconds - visibleDur * 0.1);
+        if (S.isPlaying) {
+            const visibleDur = S.duration / S.zoomLevel;
+            if (timeSeconds < S.scrollOffset || timeSeconds > S.scrollOffset + visibleDur) {
+                S.scrollOffset = Math.max(0, timeSeconds - visibleDur * 0.1);
             }
         }
 
         const origCanvas = document.getElementById('studio-waveform-original');
         _redrawWaveform('original', origCanvas, timeSeconds);
 
-        if (_currentSession && _currentSession.tracks) {
-            for (const t of _currentSession.tracks) {
+        if (S.currentSession && S.currentSession.tracks) {
+            for (const t of S.currentSession.tracks) {
                 const canvas = document.getElementById(`studio-waveform-${t.id}`);
                 _redrawWaveform(t.id, canvas, timeSeconds);
             }
@@ -2199,11 +2132,11 @@ import {
     // ── Master Bus Controls ──────────────────────────────────────────
 
     function _startMasterMeter() {
-        if (_masterMeterInterval) clearInterval(_masterMeterInterval);
-        _masterMeterInterval = setInterval(() => {
-            if (!_masterAnalyser) return;
-            const data = new Uint8Array(_masterAnalyser.frequencyBinCount);
-            _masterAnalyser.getByteTimeDomainData(data);
+        if (S.masterMeterInterval) clearInterval(S.masterMeterInterval);
+        S.masterMeterInterval = setInterval(() => {
+            if (!S.masterAnalyser) return;
+            const data = new Uint8Array(S.masterAnalyser.frequencyBinCount);
+            S.masterAnalyser.getByteTimeDomainData(data);
             let peak = 0;
             for (let i = 0; i < data.length; i++) {
                 const v = Math.abs(data[i] - 128) / 128;
@@ -2220,34 +2153,33 @@ import {
     }
 
     window.studioSetMasterVolume = function (value) {
-        _masterVolume = Math.max(0, Math.min(2, parseFloat(value)));
-        if (_masterGain) _masterGain.gain.value = _masterVolume;
+        S.masterVolume = Math.max(0, Math.min(2, parseFloat(value)));
+        if (S.masterGain) S.masterGain.gain.value = S.masterVolume;
         const label = document.getElementById('studio-master-vol-label');
-        if (label) label.textContent = Math.round(_masterVolume * 100) + '%';
+        if (label) label.textContent = Math.round(S.masterVolume * 100) + '%';
         _debounceSaveMaster();
     };
 
     window.studioToggleMasterLimiter = function () {
-        _masterLimiterOn = !_masterLimiterOn;
+        S.masterLimiterOn = !S.masterLimiterOn;
         const btn = document.getElementById('studio-master-limiter-btn');
         if (btn) {
             btn.className = 'px-2 py-0.5 rounded text-xs font-medium transition-colors ' +
-                (_masterLimiterOn ? 'bg-green-600/30 text-green-400 border border-green-600/30' : 'bg-dark-800 text-gray-500 border border-gray-700');
-            btn.textContent = _masterLimiterOn ? 'Limiter ON' : 'Limiter OFF';
+                (S.masterLimiterOn ? 'bg-green-600/30 text-green-400 border border-green-600/30' : 'bg-dark-800 text-gray-500 border border-gray-700');
+            btn.textContent = S.masterLimiterOn ? 'Limiter ON' : 'Limiter OFF';
         }
         _debounceSaveMaster();
     };
 
-    let _saveMasterTimer = null;
     function _debounceSaveMaster() {
-        if (_saveMasterTimer) clearTimeout(_saveMasterTimer);
-        _saveMasterTimer = setTimeout(async () => {
-            if (!_currentSession) return;
+        if (S.saveMasterTimer) clearTimeout(S.saveMasterTimer);
+        S.saveMasterTimer = setTimeout(async () => {
+            if (!S.currentSession) return;
             try {
-                await fetch(`/api/plugins/studio/sessions/${_currentSession.id}/master`, {
+                await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}/master`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ master_volume: _masterVolume, master_limiter: _masterLimiterOn }),
+                    body: JSON.stringify({ master_volume: S.masterVolume, master_limiter: S.masterLimiterOn }),
                 });
             } catch (e) { /* ignore */ }
         }, 1000);
@@ -2256,44 +2188,44 @@ import {
     // ── Zoom & Scroll ───────────────────────────────────────────────────
 
     window.studioZoomIn = function () {
-        const maxZoom = Math.max(1, _duration / 2); // min 2 seconds visible
-        _zoomLevel = Math.min(maxZoom, _zoomLevel * 1.5);
+        const maxZoom = Math.max(1, S.duration / 2); // min 2 seconds visible
+        S.zoomLevel = Math.min(maxZoom, S.zoomLevel * 1.5);
         _clampScroll();
-        _drawAllCursors(_pauseOffset);
+        _drawAllCursors(S.pauseOffset);
     };
 
     window.studioZoomOut = function () {
-        _zoomLevel = Math.max(1, _zoomLevel / 1.5);
+        S.zoomLevel = Math.max(1, S.zoomLevel / 1.5);
         _clampScroll();
-        _drawAllCursors(_pauseOffset);
+        _drawAllCursors(S.pauseOffset);
     };
 
     window.studioZoomFit = function () {
-        _zoomLevel = 1;
-        _scrollOffset = 0;
-        _drawAllCursors(_pauseOffset);
+        S.zoomLevel = 1;
+        S.scrollOffset = 0;
+        _drawAllCursors(S.pauseOffset);
     };
 
     window.studioScrollTimeline = function (val) {
-        _scrollOffset = parseFloat(val);
+        S.scrollOffset = parseFloat(val);
         _clampScroll();
-        const curTime = _isPlaying ? (_getAudioCtx().currentTime - _startTime) : _pauseOffset;
+        const curTime = S.isPlaying ? (_getAudioCtx().currentTime - S.startTime) : S.pauseOffset;
         _drawAllCursors(curTime);
     };
 
     function _clampScroll() {
-        const visibleDur = _duration / _zoomLevel;
-        _scrollOffset = Math.max(0, Math.min(_duration - visibleDur, _scrollOffset));
+        const visibleDur = S.duration / S.zoomLevel;
+        S.scrollOffset = Math.max(0, Math.min(S.duration - visibleDur, S.scrollOffset));
         // Update scroll bar
         const bar = document.getElementById('studio-scroll-bar');
         if (bar) {
-            bar.max = Math.max(0, _duration - visibleDur);
-            bar.value = _scrollOffset;
+            bar.max = Math.max(0, S.duration - visibleDur);
+            bar.value = S.scrollOffset;
             bar.step = visibleDur / 100;
         }
         // Update zoom display
         const zoomLabel = document.getElementById('studio-zoom-label');
-        if (zoomLabel) zoomLabel.textContent = _zoomLevel <= 1 ? 'Fit' : _zoomLevel.toFixed(1) + 'x';
+        if (zoomLabel) zoomLabel.textContent = S.zoomLevel <= 1 ? 'Fit' : S.zoomLevel.toFixed(1) + 'x';
     }
 
     function _initWaveformWheelZoom() {
@@ -2303,11 +2235,11 @@ import {
         container.addEventListener('wheel', (e) => {
             if (!e.ctrlKey && !e.metaKey) {
                 // Plain scroll = horizontal pan
-                if (_zoomLevel > 1) {
-                    const visibleDur = _duration / _zoomLevel;
-                    _scrollOffset += (e.deltaY > 0 ? 1 : -1) * visibleDur * 0.1;
+                if (S.zoomLevel > 1) {
+                    const visibleDur = S.duration / S.zoomLevel;
+                    S.scrollOffset += (e.deltaY > 0 ? 1 : -1) * visibleDur * 0.1;
                     _clampScroll();
-                    const curTime = _isPlaying ? (_getAudioCtx().currentTime - _startTime) : _pauseOffset;
+                    const curTime = S.isPlaying ? (_getAudioCtx().currentTime - S.startTime) : S.pauseOffset;
                     _drawAllCursors(curTime);
                     e.preventDefault();
                 }
@@ -2315,14 +2247,14 @@ import {
             }
             // Ctrl+scroll = zoom
             e.preventDefault();
-            const maxZoom = Math.max(1, _duration / 2);
+            const maxZoom = Math.max(1, S.duration / 2);
             if (e.deltaY < 0) {
-                _zoomLevel = Math.min(maxZoom, _zoomLevel * 1.2);
+                S.zoomLevel = Math.min(maxZoom, S.zoomLevel * 1.2);
             } else {
-                _zoomLevel = Math.max(1, _zoomLevel / 1.2);
+                S.zoomLevel = Math.max(1, S.zoomLevel / 1.2);
             }
             _clampScroll();
-            const curTime = _isPlaying ? (_getAudioCtx().currentTime - _startTime) : _pauseOffset;
+            const curTime = S.isPlaying ? (_getAudioCtx().currentTime - S.startTime) : S.pauseOffset;
             _drawAllCursors(curTime);
         }, { passive: false });
     }
@@ -2340,7 +2272,7 @@ import {
                 const opt = document.createElement('option');
                 opt.value = d.deviceId;
                 opt.textContent = d.label || `Input ${sel.options.length}`;
-                if (d.deviceId === _selectedDeviceId) opt.selected = true;
+                if (d.deviceId === S.selectedDeviceId) opt.selected = true;
                 sel.appendChild(opt);
             }
         } catch (e) {
@@ -2387,7 +2319,7 @@ import {
         const def = FX_DEFS[fxType];
         if (!def) return;
 
-        const state = _mixState[trackId];
+        const state = S.mixState[trackId];
         if (!state) return;
 
         const popup = document.createElement('div');
@@ -2460,7 +2392,7 @@ import {
         svg.addEventListener('mousedown', (e) => {
             dragging = true;
             startY = e.clientY;
-            startVal = _mixState[trackId]?.[knob.key] ?? knob.default;
+            startVal = S.mixState[trackId]?.[knob.key] ?? knob.default;
             e.preventDefault();
         });
 
@@ -2480,7 +2412,7 @@ import {
         // Mouse wheel
         svg.addEventListener('wheel', (e) => {
             e.preventDefault();
-            const currentVal = _mixState[trackId]?.[knob.key] ?? knob.default;
+            const currentVal = S.mixState[trackId]?.[knob.key] ?? knob.default;
             const delta = e.deltaY < 0 ? knob.step : -knob.step;
             let newVal = Math.max(knob.min, Math.min(knob.max, currentVal + delta));
             newVal = Math.round(newVal / knob.step) * knob.step;
@@ -2497,9 +2429,9 @@ import {
 
     function _applyFxKnobValue(trackId, fxType, knob, value, wrapper) {
         // Update mix state
-        if (!_mixState[trackId]) return;
+        if (!S.mixState[trackId]) return;
         _pushUndo();
-        _mixState[trackId][knob.key] = value;
+        S.mixState[trackId][knob.key] = value;
 
         // Update SVG
         const size = 64, cx = size / 2, cy = size / 2, r = 24;
@@ -2523,7 +2455,7 @@ import {
         if (valEl) valEl.textContent = displayVal;
 
         // Apply to live audio
-        const ts = _trackSources[trackId];
+        const ts = S.trackSources[trackId];
         if (ts) {
             if (knob.key === 'eq_low' && ts.eqLow) ts.eqLow.gain.value = value;
             if (knob.key === 'eq_mid' && ts.eqMid) ts.eqMid.gain.value = value;
@@ -2543,8 +2475,8 @@ import {
 
     function _renderMarkers() {
         const container = document.getElementById('studio-markers-list');
-        if (!container || !_currentSession) return;
-        const markers = _currentSession.markers || [];
+        if (!container || !S.currentSession) return;
+        const markers = S.currentSession.markers || [];
         if (!markers.length) {
             container.innerHTML = '<span class="text-gray-600 text-xs italic">No markers</span>';
             return;
@@ -2563,23 +2495,23 @@ import {
     }
 
     window.studioAddMarker = async function () {
-        if (!_currentSession) return;
+        if (!S.currentSession) return;
         const seekBar = document.getElementById('studio-seek-bar');
         const t = parseFloat(seekBar?.value || 0);
         const name = prompt('Marker name:', 'Marker');
         if (!name) return;
         try {
-            const resp = await fetch(`/api/plugins/studio/sessions/${_currentSession.id}/markers`, {
+            const resp = await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}/markers`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ time: t, name }),
             });
             const marker = await resp.json();
-            if (!_currentSession.markers) _currentSession.markers = [];
-            _currentSession.markers.push(marker);
-            _currentSession.markers.sort((a, b) => a.time - b.time);
+            if (!S.currentSession.markers) S.currentSession.markers = [];
+            S.currentSession.markers.push(marker);
+            S.currentSession.markers.sort((a, b) => a.time - b.time);
             _renderMarkers();
-            const curTime = _isPlaying ? (_getAudioCtx().currentTime - _startTime) : _pauseOffset;
+            const curTime = S.isPlaying ? (_getAudioCtx().currentTime - S.startTime) : S.pauseOffset;
             _drawAllCursors(curTime);
         } catch (e) {
             console.error('[Studio] Add marker error:', e);
@@ -2589,11 +2521,11 @@ import {
     window.studioDeleteMarker = async function (id) {
         try {
             await fetch(`/api/plugins/studio/markers/${id}`, { method: 'DELETE' });
-            if (_currentSession && _currentSession.markers) {
-                _currentSession.markers = _currentSession.markers.filter(m => m.id !== id);
+            if (S.currentSession && S.currentSession.markers) {
+                S.currentSession.markers = S.currentSession.markers.filter(m => m.id !== id);
             }
             _renderMarkers();
-            const curTime = _isPlaying ? (_getAudioCtx().currentTime - _startTime) : _pauseOffset;
+            const curTime = S.isPlaying ? (_getAudioCtx().currentTime - S.startTime) : S.pauseOffset;
             _drawAllCursors(curTime);
         } catch (e) {
             console.error('[Studio] Delete marker error:', e);
@@ -2610,7 +2542,7 @@ import {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: newName }),
             });
-            const m = _currentSession.markers.find(m => m.id === id);
+            const m = S.currentSession.markers.find(m => m.id === id);
             if (m) m.name = newName;
             _renderMarkers();
         } catch (e) {
@@ -2619,19 +2551,19 @@ import {
     };
 
     window.studioImportSongMarkers = async function () {
-        if (!_currentSession) return;
+        if (!S.currentSession) return;
         try {
-            const resp = await fetch(`/api/plugins/studio/sessions/${_currentSession.id}/import-markers`, {
+            const resp = await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}/import-markers`, {
                 method: 'POST',
             });
             const data = await resp.json();
             if (data.error) { alert(data.error); return; }
             // Reload to get updated markers
-            const sessionResp = await fetch(`/api/plugins/studio/sessions/${_currentSession.id}`);
+            const sessionResp = await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}`);
             const session = await sessionResp.json();
-            _currentSession.markers = session.markers || [];
+            S.currentSession.markers = session.markers || [];
             _renderMarkers();
-            const curTime = _isPlaying ? (_getAudioCtx().currentTime - _startTime) : _pauseOffset;
+            const curTime = S.isPlaying ? (_getAudioCtx().currentTime - S.startTime) : S.pauseOffset;
             _drawAllCursors(curTime);
             alert(`Imported ${data.added} markers from song sections.`);
         } catch (e) {
@@ -2714,7 +2646,7 @@ import {
     };
 
     async function _extractStems(stems) {
-        if (!_currentSession) return;
+        if (!S.currentSession) return;
         const statusEl = document.getElementById('studio-demucs-extract-status');
         statusEl.textContent = 'Sending to Demucs server...';
         statusEl.className = 'ml-2 text-purple-300 text-xs';
@@ -2723,7 +2655,7 @@ import {
         const slopsmithUrl = window.location.origin;
 
         try {
-            const resp = await fetch(`/api/plugins/studio/sessions/${_currentSession.id}/extract-drums`, {
+            const resp = await fetch(`/api/plugins/studio/sessions/${S.currentSession.id}/extract-drums`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ stems, slopsmith_url: slopsmithUrl }),
@@ -2748,13 +2680,13 @@ import {
 
     function _cleanup() {
         studioStop();
-        _currentSession = null;
-        _songBuffer = null;
-        _trackBuffers = {};
-        _waveformPeaks = {};
-        _mixState = { original: { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 } };
-        _duration = 0;
-        _pauseOffset = 0;
+        S.currentSession = null;
+        S.songBuffer = null;
+        S.trackBuffers = {};
+        S.waveformPeaks = {};
+        S.mixState = { original: { volume: 1.0, pan: 0.0, muted: false, solo: false, offset_ms: 0, fade_in_ms: 0, fade_out_ms: 0, eq_low: 0, eq_mid: 0, eq_high: 0, reverb_send: 0, comp_threshold: -24, comp_ratio: 1, comp_attack: 0.003, comp_release: 0.25 } };
+        S.duration = 0;
+        S.pauseOffset = 0;
     }
 
     // ── Helpers ────────────────────────────────────────────────────────
@@ -2766,7 +2698,7 @@ import {
             // Only handle when studio screen is visible
             const studioRoot = document.getElementById('studio-root');
             if (!studioRoot || studioRoot.offsetParent === null) return;
-            if (!_currentSession) return;
+            if (!S.currentSession) return;
 
             if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
                 e.preventDefault();
