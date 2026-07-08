@@ -28,7 +28,7 @@ export function _renderSessionList(sessions) {
 
 export function _renderTracks() {
     const container = document.getElementById('studio-recorded-tracks');
-    if (!container) return;
+    if (!container || !S.currentSession) return;   // no session (e.g. after _cleanup) → nothing to render
     const tracks = S.currentSession.tracks || [];
 
     let html = '';
