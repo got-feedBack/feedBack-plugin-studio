@@ -1,6 +1,6 @@
 # Slopsmith Studio Plugin
 
-A collaborative band recording and mixing plugin for [Slopsmith](https://github.com/got-feedback/feedback). Record individual parts against a song, layer takes, mix with per-track effects, and export a final mix.
+A collaborative band recording and mixing plugin for [Slopsmith](https://github.com/got-feedback/feedBack). Record individual parts against a song, layer takes, mix with per-track effects, and export a final mix.
 
 ![Slopsmith Studio](screenshot.png)
 
