@@ -64,7 +64,7 @@ Track Source
 
 ### Stem Separation (Demucs)
 
-Integrates with [slopsmith-demucs-server](https://github.com/byrongamatos/slopsmith-demucs-server) for AI-powered source separation. The demucs service runs on a desktop with GPU/RAM while Slopsmith runs on a NAS or Docker host.
+Integrates with [feedBack-demucs-server](https://github.com/got-feedBack/feedBack-demucs-server) for AI-powered source separation. The demucs service runs on a desktop with GPU/RAM while Slopsmith runs on a NAS or Docker host.
 
 - **Extract Drums** — isolate the drum track from the original song audio
 - **Extract All Stems** — separate into drums, bass, vocals, and other
@@ -118,11 +118,11 @@ Recordings and stems are stored in `{CONFIG_DIR}/studio/{session_id}/`. Uploaded
 
 ## Demucs Server Setup
 
-The [Demucs separation service](https://github.com/byrongamatos/slopsmith-demucs-server) runs separately (e.g. on a desktop with GPU):
+The [Demucs separation service](https://github.com/got-feedBack/feedBack-demucs-server) runs separately (e.g. on a desktop with GPU):
 
 ```bash
-git clone https://github.com/byrongamatos/slopsmith-demucs-server.git
-cd slopsmith-demucs-server
+git clone https://github.com/got-feedBack/feedBack-demucs-server.git
+cd feedBack-demucs-server
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python server.py --port 7865
@@ -138,9 +138,11 @@ Configure the server URL in the Studio plugin's Demucs Settings panel.
 
 ## Installation
 
-Copy the plugin files into your Slopsmith plugins directory:
+Clone the plugin into your feedBack plugins directory:
 ```bash
-cp -r slopsmith-plugin-studio/ path/to/slopsmith/plugins/studio/
+cd /path/to/feedBack/plugins
+git clone https://github.com/got-feedBack/feedBack-plugin-studio.git studio
+docker compose restart
 ```
 
-Restart Slopsmith. The "Studio" entry appears in the navigation menu.
+After the restart, the "Studio" entry appears in the navigation menu.
